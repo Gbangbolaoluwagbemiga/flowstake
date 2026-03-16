@@ -1,0 +1,27 @@
+@import "tailwindcss";
+
+@theme {
+  --color-blue-400: #60a5fa;
+  --color-blue-500: #3b82f6;
+  --color-blue-600: #2563eb;
+}
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-white;
+    background-image: 
+      radial-gradient(at 0% 0%, hsla(210, 100%, 15%, 0.15) 0, transparent 50%),
+      radial-gradient(at 100% 100%, hsla(220, 100%, 15%, 0.15) 0, transparent 50%);
+    background-attachment: fixed;
+  }
+}
+
+@utility glass {
+  background: rgba(255, 255, 255, 0.03);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+}
+
+@utility glow-blue {
+  box-shadow: 0 0 40px -10px rgba(59, 130, 246, 0.2);
+}
