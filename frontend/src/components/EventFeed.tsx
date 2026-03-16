@@ -46,7 +46,7 @@ export function EventFeed() {
                             <div className="bg-blue-500/20 p-2 rounded-md"><Terminal size={14} className="text-blue-400" /></div>
                             <div className="flex-1 space-y-1">
                                 <div className="flex justify-between items-center"><span className="text-xs font-black uppercase text-blue-400">{ev.type}</span><span className="text-[10px] text-slate-500">{ev.timestamp}</span></div>
-                                <p className="text-xs text-slate-300 break-all font-mono">User {ev.user.slice(0, 6)}... submitted {ev.amount} wstETH</p>
+                                <p className="text-xs text-slate-300 break-all font-mono">User {(ev.user || "").slice(0, 6)}... submitted {ev.amount} wstETH</p>
                             </div>
                         </div>
                     ))

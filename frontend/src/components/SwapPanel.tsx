@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ArrowDown, Coins, Zap, Trophy, Loader2 } from "lucide-react";
+import { ArrowDown, Coins, Trophy } from "lucide-react";
 import { useAccount, useWriteContract, useReadContract, useWaitForTransactionReceipt, useSwitchChain } from 'wagmi';
 import { parseEther, formatEther } from 'viem';
 import { Switch } from "@/components/ui/switch";

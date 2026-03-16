@@ -2,7 +2,7 @@ export function Hero() {
     return (
         <div className="relative pt-20 pb-16 md:pt-32 md:pb-24">
             <div className="text-center space-y-8">
-                <h1 className="text-4xl md:text-7xl font-black tracking-tighter bg-linear-to-r from-blue-400 via-white to-slate-500 bg-clip-text text-transparent animate-in fade-in slide-in-from-bottom-8 duration-1000">
+                <h1 className="text-4xl md:text-7xl font-black tracking-tighter bg-gradient-to-r from-blue-400 via-white to-slate-500 bg-clip-text text-transparent animate-in fade-in slide-in-from-bottom-8 duration-1000">
                     Preserve Staking Yield <br />
                     <span className="text-white">While You Swap.</span>
                 </h1>
