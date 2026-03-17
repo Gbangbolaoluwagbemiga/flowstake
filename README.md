@@ -65,7 +65,7 @@ The infrastructure is 100% on-chain and live for testing.
 We built a premium Next.js 14 Web3 dashboard to demonstrate the hook's efficiency.
 
 ```bash
-git clone https://github.com/your-repo/FlowStake.git
+git clone https://github.com/Gbangbolaoluwagbemiga/flowstake.git
 cd FlowStake/frontend
 npm install
 npm run dev
