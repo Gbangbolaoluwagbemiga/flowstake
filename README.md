@@ -18,7 +18,7 @@ We integrate **Reactive Network** to completely decentralize the cross-chain set
 
 ---
 
-## 🏗 System Architecture
+## 🏗 System Architecture.
 
 ```mermaid
 sequenceDiagram
