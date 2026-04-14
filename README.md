@@ -2,15 +2,6 @@
 
 > **Multi-agent AI for crypto & DeFi on HashKey Chain (EVM): routed specialists, tool-grounded answers, and native HSK settlement — with optional on-chain spending policy.**
 
-
-### GitHub “About” (copy into **Settings → General → About**)
-
-**Website:** your production URL (e.g. `https://kairos-hashkey.vercel.app`)
-
-**Topics** (paste as tags on the same About panel):
-
-`hashkey-chain` `hashkey` `hsk` `evm` `defi` `ai-agents` `multi-agent` `typescript` `react` `solidity` `groq` `foundry` `micropayments`
-
 ---
 
 ## What Kairos Does
@@ -32,7 +23,7 @@ Kairos is the **agent + money** layer for crypto copilots: specialists fetch rea
 | News Scout | `news` | Crypto headlines (aggregated RSS) |
 | Yield Optimizer | `yield` | DeFi yields across 500+ protocols |
 | Tokenomics Analyzer | `tokenomics` | Supply, unlocks, inflation models |
-| Chain Scout | `chain-scout` | HashKey/EVM account facts (balance, nonce, contract detection) |
+| Chain Scout | `chain-scout` | HashKey testnet **chain pulse** + **Explain my wallet** (0x → snapshot, risks, next actions) + 0x account facts |
 | Perp Stats | `perp` | Perpetual futures, funding rates, open interest |
 | Protocol Stats | `protocol` | TVL, fees, revenue via DeFiLlama |
 | Bridge Monitor | `bridges` | Cross-chain bridge volumes |
@@ -46,6 +37,7 @@ Kairos is the **agent + money** layer for crypto copilots: specialists fetch rea
 kairos-frontend/     React + Vite + TailwindCSS (deployed on Vercel/Railway)
 kairos-backend/      Node.js + Express + TypeScript (deployed on Railway)
   src/
+    load-env.ts           Loads `kairos-backend/.env` by path (works regardless of `process.cwd()`)
     index.ts              API routes, activity feed, treasury endpoints
     config.ts             All agent addresses, network config, pricing
     services/
@@ -59,6 +51,7 @@ kairos-backend/      Node.js + Express + TypeScript (deployed on Railway)
       defillama.ts        DeFiLlama TVL/fees/bridges
       perp-stats/         Perpetuals data from 7+ exchanges
       hashkey-chain.ts     HashKey RPC helpers (balance)
+      hashkey-chain-pulse.ts Live block / gas / native-activity snapshot via HASHKEY_RPC_URL
       rag.ts              RAG corpus indexing + semantic search
       supabase.ts         Chat history, ratings, response time logs
       hashkey.ts          HashKey treasury + A2A payments
@@ -103,11 +96,20 @@ npm run dev
 
 Frontend runs at `http://localhost:5173`, backend at `http://localhost:3001`.
 
+### Chain pulse vs web search (important for demos)
+
+- **Live blocks / gas / `tx.value` activity** come from **`getHashKeyPulse`** (HashKey RPC), not from Brave/snippets.
+- With **`KAIROS_GROQ_TOOL_CALLING=1`**, Groq may call **`searchWeb`** for a chain-style question; the backend **backfills `getHashKeyPulse`** when pulse JSON is still missing, **without re-running** search/news (avoids duplicate treasury pays).
+- The **company “Oracle”** web-research shortcut does **not** run when the question is classified as a **HashKey chain pulse** (avoids unrelated `searchWeb` + news on RPC-style questions).
+- Default **`KAIROS_FAST_MODE=1`** routes pulse + price deterministically first — safest for live demos.
+
 ---
 
 ## Environment Variables
 
 ### Backend (`kairos-backend/.env`)
+
+The server loads **`kairos-backend/.env` by file path** (not only `process.cwd()`), so Brave/Tavily and other keys work even if you start the dev server from a parent folder. **Restart the backend** after editing `.env`.
 
 **Required:**
 
@@ -121,6 +123,9 @@ Frontend runs at `http://localhost:5173`, backend at `http://localhost:3001`.
 | `KAIROS_AGENT_REGISTRY_EVM_ADDRESS` | Deployed `AgentRegistry` address |
 | `KAIROS_SPENDING_POLICY_EVM_ADDRESS` | Deployed `SpendingPolicy` address (optional) |
 | `KAIROS_SPENDING_POLICY_STRICT` | `1` = block payout if `canSpend` reverts. Default `0` = still pay (direct treasury transfer) when the policy call reverts — fixes stuck “Confirming” when ABI/policy mismatches. |
+| `KAIROS_TREASURY_TX_WAIT_CONFIRMS` | Default `1` — wait for that many confirmations after each treasury native transfer (and `recordSpend` when used) before the next payout. Prevents **replacement fee too low** when multiple agents are paid in one request. Set `0` to skip waits (faster, less safe). |
+| `KAIROS_A2A_TX_WAIT_CONFIRMS` | Default `1` — same for agent→agent HSK transfers. |
+| `KAIROS_TX_WAIT_TIMEOUT_MS` | Default `180000` — max time to wait for confirmations per transaction. |
 
 **Server config:**
 
@@ -148,10 +153,15 @@ DEX_VOLUMES_EVM_ADDRESS
 | Variable | Effect if missing |
 |---|---|
 | `COINGECKO_API_KEY` | Price oracle hits public rate limits |
+| `TAVILY_API_KEY` | **Recommended in production:** `searchWeb` uses an offline Groq summary without it (or without `BRAVE_SEARCH_API_KEY`) |
+| `BRAVE_SEARCH_API_KEY` | Alternative live web index for `searchWeb` |
+| `KAIROS_WEB_SEARCH_PROVIDER` | `auto` (default, try Tavily then Brave), `tavily`, or `brave` |
 | `SUPABASE_URL` + `SUPABASE_ANON_KEY` | No persistent chat history, ratings, or response time tracking |
 | `KAIROS_AGENT_REGISTRY_EVM_ADDRESS` | Agent address resolution falls back to env map (payments still work) |
 | `KAIROS_SPENDING_POLICY_EVM_ADDRESS` | Spending-policy enforcement for treasury payouts |
 | `STRICT_CORS` | Set to `1` to allow only **`ALLOWED_ORIGINS`** plus `https://*.vercel.app`. If unset, CORS is **permissive** (reflects any `Origin`) — better for hackathon deploys; tighten for real production. |
+
+index…` vs the one-line warning when keys are missing).
 
 ### Frontend (`kairos-frontend/.env`)
 

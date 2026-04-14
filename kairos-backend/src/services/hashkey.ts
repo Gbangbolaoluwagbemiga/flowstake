@@ -88,19 +88,32 @@ export async function sendTreasuryPayment(args: {
         }
     }
 
+    const waitConfirms = Math.max(0, Math.min(12, Number(process.env.KAIROS_TREASURY_TX_WAIT_CONFIRMS ?? "1") || 0));
+    const waitTimeoutMs = Math.max(5000, Number(process.env.KAIROS_TX_WAIT_TIMEOUT_MS ?? "180000") || 180000);
+
     // Put label into tx metadata only via logs off-chain; native transfers can't carry memo.
     const tx = await wallet.sendTransaction({
         to: args.to,
         value: args.amountWei,
     });
 
-    // Record spend after broadcast (best-effort; do not fail the payment if this fails)
+    // Wait until the payout is mined before releasing the treasury queue; otherwise the next
+    // payout can reuse a nonce that is still pending → "replacement fee too low" on HashKey RPC.
+    if (waitConfirms > 0) {
+        await tx.wait(waitConfirms, waitTimeoutMs);
+    }
+
+    // Record spend after the transfer is settled (best-effort; do not fail the payment if this fails)
     if (args.spendingPolicy?.spendingPolicyAddress && !skipPolicy) {
         try {
             const policy = new ethers.Contract(args.spendingPolicy.spendingPolicyAddress, SPENDING_POLICY_ABI, wallet);
             const key = ethers.keccak256(ethers.toUtf8Bytes(args.agentKey));
             const rec = await policy.recordSpend(key, args.amountWei);
-            void rec.wait().catch(() => {});
+            if (waitConfirms > 0) {
+                await rec.wait(waitConfirms, waitTimeoutMs);
+            } else {
+                void rec.wait().catch(() => {});
+            }
         } catch (e) {
             // non-fatal
             console.warn(`[HashKey] recordSpend failed for ${args.agentKey} (${args.label}):`, (e as Error)?.message);
@@ -124,6 +137,11 @@ export async function sendAgentToAgentPayment(args: {
     const provider = new ethers.JsonRpcProvider(args.rpcUrl, args.chainId);
     const wallet = new ethers.Wallet(args.fromPrivateKey, provider);
     const tx = await wallet.sendTransaction({ to: args.to, value: args.amountWei });
+    const waitConfirms = Math.max(0, Math.min(12, Number(process.env.KAIROS_A2A_TX_WAIT_CONFIRMS ?? "1") || 0));
+    const waitTimeoutMs = Math.max(5000, Number(process.env.KAIROS_TX_WAIT_TIMEOUT_MS ?? "180000") || 180000);
+    if (waitConfirms > 0) {
+        await tx.wait(waitConfirms, waitTimeoutMs);
+    }
     return tx.hash;
 }
 

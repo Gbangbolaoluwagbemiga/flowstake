@@ -7,9 +7,11 @@ import { ChatInput } from '@/components/chat/ChatInput';
 import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { useChat } from '@/hooks/useChat';
 import { useWallet } from '@/contexts/WalletContext';
-import { Zap, Bot, TrendingUp, BarChart3, Newspaper, Coins, ArrowRight, Wallet, Brain, ExternalLink } from 'lucide-react';
+import { Zap, Bot, TrendingUp, BarChart3, Newspaper, Coins, ArrowRight, Wallet, Brain, ExternalLink, Activity } from 'lucide-react';
 
 const AGENT_PROMPTS = [
+  { icon: Activity, label: 'HashKey Chain Pulse', prompt: 'What is the live chain pulse on HashKey testnet? Show the last 5 blocks, tx counts, base fee, and native HSK moving on-chain.', color: '#34d399' },
+  { icon: Wallet, label: 'Explain my wallet', prompt: 'Explain my wallet 0x3Be7fbBDbC73Fc4731D60EF09c4BA1A94DC58E41 — summarize on-chain facts, risks, and next actions.', color: '#22d3ee' },
   { icon: TrendingUp, label: 'Price Oracle', prompt: 'What is the current price and ATH of HSK?', color: '#a78bfa' },
   { icon: Newspaper, label: 'News Scout', prompt: 'What are the latest major crypto news headlines?', color: '#60a5fa' },
   { icon: BarChart3, label: 'Protocol Stats', prompt: 'What are the top DeFi protocols by TVL right now?', color: '#818cf8' },

@@ -14,6 +14,8 @@ export interface SearchResult {
     answer: string;
     liveWeb: boolean;
     provider: "tavily" | "brave" | "groq";
+    /** ISO time when this result was assembled (for “freshness” UI). */
+    fetchedAt: string;
     results: Array<{
         title: string;
         url: string;
@@ -71,6 +73,7 @@ async function tavilySearch(query: string): Promise<SearchResult | null> {
             answer: answer || "Here are the top indexed snippets for your query (see sources).",
             liveWeb: true,
             provider: "tavily",
+            fetchedAt: new Date().toISOString(),
             results,
         };
     } catch (e: any) {
@@ -129,6 +132,7 @@ async function braveSearch(query: string): Promise<SearchResult | null> {
             answer,
             liveWeb: true,
             provider: "brave",
+            fetchedAt: new Date().toISOString(),
             results,
         };
     } catch (e: any) {
@@ -173,6 +177,7 @@ async function groqBestEffort(query: string): Promise<SearchResult> {
         answer: text || "I don’t have a live web index configured for this deployment, so I can’t verify fresh sources for that question.",
         liveWeb: false,
         provider: "groq",
+        fetchedAt: new Date().toISOString(),
         results,
     };
 }
@@ -188,6 +193,7 @@ export async function searchWeb(query: string): Promise<SearchResult> {
             answer: "Please provide a non-empty question.",
             liveWeb: false,
             provider: "groq",
+            fetchedAt: new Date().toISOString(),
             results: [],
         };
     }
@@ -219,7 +225,28 @@ export async function searchWeb(query: string): Promise<SearchResult> {
             answer: "Search is temporarily unavailable. Please try again in a moment.",
             liveWeb: false,
             provider: "groq",
+            fetchedAt: new Date().toISOString(),
             results: [],
         };
+    }
+}
+
+let webSearchConfigLogged = false;
+
+/** One-time startup hint: set Tavily or Brave in production for live web index. */
+export function logWebSearchConfigOnce(): void {
+    if (webSearchConfigLogged) return;
+    webSearchConfigLogged = true;
+    const tavily = !!(process.env.TAVILY_API_KEY || "").trim();
+    const brave = !!(process.env.BRAVE_SEARCH_API_KEY || "").trim();
+    const prefer = (process.env.KAIROS_WEB_SEARCH_PROVIDER || "auto").trim().toLowerCase();
+    if (tavily || brave) {
+        console.log(
+            `[Search] Live web index: ${tavily ? "Tavily ✓" : "Tavily —"} ${brave ? "Brave ✓" : "Brave —"} (provider preference: ${prefer})`
+        );
+    } else {
+        console.warn(
+            "[Search] No TAVILY_API_KEY or BRAVE_SEARCH_API_KEY — searchWeb uses offline Groq summary. Set a key in production for fresh “what happened today” answers."
+        );
     }
 }

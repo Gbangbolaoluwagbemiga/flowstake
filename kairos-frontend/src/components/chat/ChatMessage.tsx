@@ -62,7 +62,7 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
       setReceiptTimedOut(false);
       return;
     }
-    const t = window.setTimeout(() => setReceiptTimedOut(true), 50_000);
+    const t = window.setTimeout(() => setReceiptTimedOut(true), 95_000);
     return () => window.clearTimeout(t);
   }, [isUser, agentsUsed, txHashes]);
 
@@ -202,7 +202,7 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
                   style={{ ...cardStyle, opacity: 0.95 }}
                   title={
                     receiptTimedOut
-                      ? 'No tx hash after ~50s — treasury payment likely failed (e.g. spending policy) or receipts never arrived. Check backend logs; with KAIROS_SPENDING_POLICY_STRICT=0, canSpend reverts are bypassed for demo payouts.'
+                      ? 'No tx hash after ~90s — payout may still be confirming on-chain, or receipts never arrived. Check backend logs; treasury txs can land after the first response.'
                       : 'Waiting for tx hash from the API / receipts poll…'
                   }
                 >

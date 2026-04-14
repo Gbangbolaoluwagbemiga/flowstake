@@ -89,10 +89,11 @@ export function useChat() {
 
       setMessages(prev => [...prev, aiMessage]);
 
-      // Fast receipts: poll briefly for real tx hashes without slowing responses.
+      // Fast receipts: treasury txs can finish *after* the JSON response (serialized payouts + confirms).
+      // Keep merging /receipts until timeout — do not stop on first partial map or late hashes never apply.
       if (data?.agentsUsed?.length) {
         const start = Date.now();
-        const maxMs = 60000;
+        const maxMs = 90000;
         const poll = async () => {
           if (Date.now() - start > maxMs) return;
           try {
@@ -107,9 +108,10 @@ export function useChat() {
                     : m
                 )
               );
-              return;
             }
-          } catch {}
+          } catch {
+            /* ignore */
+          }
           setTimeout(poll, 750);
         };
         setTimeout(poll, 500);

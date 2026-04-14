@@ -16,6 +16,7 @@ import { retrieveRagAugmentation, type RagSource } from "./rag.js";
 import { ethers } from "ethers";
 import { loadHashkeyConfigFromEnv, sendTreasuryPayment as sendHashkeyTreasuryPayment, sendAgentToAgentPayment as sendHashkeyA2A } from "./hashkey.js";
 import { resolveAgentEvm } from "./agent-registry-evm.js";
+import { fetchHashKeyChainPulse } from "./hashkey-chain-pulse.js";
 
 const KAIROS_PAYMENTS = (process.env.KAIROS_PAYMENTS || "hashkey").trim().toLowerCase(); // "hashkey" | "off"
 const USE_HASHKEY = !KAIROS_PAYMENTS.startsWith("off");
@@ -308,6 +309,8 @@ async function synthesizeGroundedAnswer(userPrompt: string, toolJson: Record<str
                         "HARD RULES:\n" +
                         "- Use ONLY facts supported by TOOL_JSON. If TOOL_JSON does not contain a fact, do not assert it.\n" +
                         "- For ANY numeric token price, market cap, TVL, volume, or percentage: quote ONLY from tool outputs that contain that number (usually getPriceData:*). Never guess prices.\n" +
+                        "- When getPriceData includes lastUpdated, end the market section with one line: **Last updated:** <that timestamp> (human-readable).\n" +
+                        "- If the user asks for **HashKey testnet blocks / gas / chain pulse / tx counts**, prioritize **getHashKeyPulse** JSON for block numbers and fees; do not substitute Brave/docs snippets for that on-chain data.\n" +
                         "- If a searchWeb entry has liveWeb:false, label that section clearly as an offline model summary (not verified against a live web index).\n" +
                         "- If a searchWeb entry has liveWeb:true, summarize using the provided titles/URLs/snippets; do not invent new URLs.\n" +
                         "- If tools conflict, say what differs and what you would verify next (one sentence).\n" +
@@ -333,6 +336,24 @@ async function synthesizeGroundedAnswer(userPrompt: string, toolJson: Record<str
     }
 }
 
+/** Turn raw ISO timestamps in user-facing lines into locale date/time (synthesis often echoes JSON). */
+function polishMarketTimestamps(text: string): string {
+    if (!text) return text;
+    const isoChunk = String.raw`[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]{1,9})?Z?`;
+    const fmt = (raw: string) => {
+        const d = new Date(raw.trim());
+        if (Number.isNaN(d.getTime())) return raw;
+        return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    };
+    return text.replace(
+        new RegExp(`(\\*\\*Last updated:\\*\\*\\s*|Last updated:\\s*)(${isoChunk})`, "gi"),
+        (_m, pre: string, iso: string) => pre + fmt(iso)
+    ).replace(
+        new RegExp(`(\\*\\*Last indexed:\\*\\*\\s*|Last indexed:\\s*)(${isoChunk})`, "gi"),
+        (_m, pre: string, iso: string) => pre + fmt(iso)
+    );
+}
+
 function stripInlineRagCitations(text: string): string {
     if (!text) return text;
     // Remove inline citations like [Source 1], [source1], [SOURCE 12]
@@ -342,7 +363,7 @@ function stripInlineRagCitations(text: string): string {
         .replace(/[ \t]{2,}/g, " ")
         .replace(/\n{3,}/g, "\n\n")
         .trim();
-    return cleaned;
+    return polishMarketTimestamps(cleaned);
 }
 
 type RoutedToolCall = { key: string; name: string; args: any };
@@ -351,6 +372,112 @@ function toolResultKeys(last: Record<string, any>, toolName: string): string[] {
     return Object.keys(last)
         .filter((k) => k === toolName || k.startsWith(`${toolName}:`))
         .sort();
+}
+
+function firstMatchingToolNode(last: Record<string, any>, toolName: string): any | undefined {
+    const keys = toolResultKeys(last, toolName);
+    for (const k of keys) {
+        const node = last[k];
+        if (node && !node.error) return node;
+    }
+    for (const k of keys) {
+        const node = last[k];
+        if (node) return node;
+    }
+    return undefined;
+}
+
+function formatMarketLastUpdated(iso?: string | null): string {
+    if (!iso || typeof iso !== "string") return new Date().toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    const d = new Date(iso);
+    if (Number.isNaN(d.getTime())) return new Date().toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+    return d.toLocaleString(undefined, { dateStyle: "medium", timeStyle: "short" });
+}
+
+function formatSearchFetchedAt(iso?: string | null): string {
+    return formatMarketLastUpdated(iso);
+}
+
+/** “Explain my wallet” and bare 0x paste → Chain Scout narrative (risks + next actions). */
+function wantsWalletExplain(userPrompt: string): boolean {
+    const q = (userPrompt || "").trim();
+    if (!/\b0x[a-f0-9]{40}\b/i.test(q)) return false;
+    if (/^\s*0x[a-f0-9]{40}\s*$/i.test(q)) return true;
+    const s = q.toLowerCase();
+    return (
+        /\bexplain\b|\banalyze\b|\brisks?\b|\bwhat\s+should\b|\breview\b|\bwhat\s+is\s+this\b|\btell\s+me\s+about\b|\bshould\s+i\s+trust\b|\bdecode\b|\binterpret\b/.test(
+            s
+        ) ||
+        /\b(my|this)\s+wallet\b/.test(s) ||
+        /\bwallet\s+(address|addr)\b/.test(s)
+    );
+}
+
+async function synthesizeWalletExplainer(userPrompt: string, toolJson: Record<string, any>): Promise<string | null> {
+    const subset: Record<string, any> = {};
+    for (const k of Object.keys(toolJson || {})) {
+        if (k === "getChainAccount" || k.startsWith("getChainAccount:")) subset[k] = toolJson[k];
+    }
+    if (!Object.keys(subset).length) return null;
+    try {
+        const completion = await groqChatComplete({
+            messages: [
+                {
+                    role: "system",
+                    content:
+                        "You are Kairos Chain Scout (HashKey / EVM). The user asked about a wallet address.\n" +
+                        "You MUST ground every factual claim in WALLET_JSON only. Never invent balances, labels, or chain IDs.\n\n" +
+                        "Output exactly two sections with these headings:\n" +
+                        "### Risks (3–6 short bullets)\n" +
+                        "### Next actions (3–5 short bullets)\n\n" +
+                        "Cover where relevant: EOA vs contract, empty/low balance and dusting, nonce / unused address, interacting with unknown contracts, phishing patterns, verifying counterparties off-chain, testnet vs mainnet (this RPC may be testnet).\n\n" +
+                        "Do not repeat the raw JSON. Do not mention payments, tools, or \"JSON\".",
+                },
+                {
+                    role: "user",
+                    content: `USER_QUESTION:\n${(userPrompt || "").trim()}\n\nWALLET_JSON:\n${bundleToolJsonForSynthesis(subset)}`,
+                },
+            ],
+            tools: undefined,
+            toolChoice: "none",
+            temperature: 0.15,
+            maxTokens: 550,
+            timeoutMs: Math.min(22000, Math.max(8000, Number(process.env.KAIROS_WALLET_EXPLAIN_TIMEOUT_MS || 16000) || 16000)),
+        });
+        const text = (completion.content || "").trim();
+        return text.length >= 80 ? text : null;
+    } catch (e: any) {
+        console.warn("[Kairos] Wallet explainer skipped:", e?.message || e);
+        return null;
+    }
+}
+
+async function composeFastToolAnswer(
+    userPrompt: string,
+    routed: RoutedToolCall[],
+    lastToolResultsByName: Record<string, any>
+): Promise<string> {
+    const rendered = renderFastFromTools(lastToolResultsByName);
+    if (!rendered) return "";
+
+    const routedNames = new Set(routed.map((r) => r.name));
+    const explain = wantsWalletExplain(userPrompt);
+    const explainOnly = explain && routedNames.size === 1 && routedNames.has("getChainAccount");
+
+    let body: string;
+    if (explainOnly) {
+        body = rendered.trim();
+    } else {
+        const syn = await synthesizeGroundedAnswer(userPrompt, lastToolResultsByName);
+        body = (syn || rendered).trim();
+    }
+
+    const acct = firstMatchingToolNode(lastToolResultsByName, "getChainAccount");
+    if (explain && acct && !acct.error) {
+        const extra = await synthesizeWalletExplainer(userPrompt, lastToolResultsByName);
+        if (extra) body = `${body}\n\n${extra.trim()}`;
+    }
+    return body;
 }
 
 function renderFastFromTools(last: Record<string, any>): string | null {
@@ -379,7 +506,8 @@ function renderFastFromTools(last: Record<string, any>): string | null {
                 `- Market cap: ${d.marketCap != null ? `$${Number(d.marketCap).toLocaleString()}` : "N/A"}\n` +
                 `- Volume (24h): ${d.volume24h != null ? `$${Number(d.volume24h).toLocaleString()}` : "N/A"}\n` +
                 `- ATH: ${ath} (reached ${athDate})` +
-                (drawdown ? `\n- vs ATH: ${drawdown}` : "")
+                (drawdown ? `\n- vs ATH: ${drawdown}` : "") +
+                `\n\n**Last updated:** ${formatMarketLastUpdated(d.lastUpdated)}`
             );
         });
         sections.push(blocks.join("\n\n"));
@@ -415,11 +543,30 @@ function renderFastFromTools(last: Record<string, any>): string | null {
                       ? "Offline summary (set TAVILY_API_KEY or BRAVE_SEARCH_API_KEY for live web index)"
                       : "Research";
             const prov = d.provider ? ` · ${String(d.provider)}` : "";
+            const fetched = d.fetchedAt ? formatSearchFetchedAt(d.fetchedAt) : formatSearchFetchedAt(null);
             sections.push(
                 `**${mode}${prov}${q ? ` — “${q}”` : ""}**\n\n${answer}` +
-                    (srcLines.length ? `\n\n**Sources**\n${srcLines.join("\n")}` : "")
+                    (srcLines.length ? `\n\n**Sources**\n${srcLines.join("\n")}` : "") +
+                    `\n\n**Last indexed:** ${fetched}`
             );
         }
+    }
+
+    const acctKeys = toolResultKeys(last, "getChainAccount");
+    for (const ak of acctKeys) {
+        if (!hasKey(ak)) continue;
+        const d = last[ak] as any;
+        const addr = d.address ? String(d.address) : "—";
+        const bal = d.balanceHsk != null ? String(d.balanceHsk) : "?";
+        const nonce = d.nonce != null ? String(d.nonce) : "?";
+        const kind = d.isContract ? "Contract (bytecode at this address)" : "EOA (externally owned account)";
+        sections.push(
+            `**Wallet snapshot (Chain Scout · configured RPC)**\n` +
+                `- **Address:** \`${addr}\`\n` +
+                `- **Native balance:** ${bal} HSK\n` +
+                `- **Nonce:** ${nonce}\n` +
+                `- **Account type:** ${kind}`
+        );
     }
 
     if (hasKey("getBridges")) {
@@ -441,6 +588,31 @@ function renderFastFromTools(last: Record<string, any>): string | null {
                 `\n**How to use this**\n- Bridge assets to a supported chain, then on-ramp to HashKey Chain via a compatible bridge or exchange.\n- Always verify fees + supported assets on the bridge UI before sending large amounts.`
             );
         }
+    }
+
+    const pulseKeys = toolResultKeys(last, "getHashKeyPulse");
+    for (const pk of pulseKeys) {
+        if (!hasKey(pk)) continue;
+        const d = last[pk] as any;
+        const rows = Array.isArray(d.blocks) ? d.blocks : [];
+        const lines = rows.map((b: any, i: number) => {
+            const num = b.number != null ? `#${b.number}` : `#?`;
+            const txs = b.txCount != null ? `${b.txCount} txs` : "txs n/a";
+            const vol = b.nativeMovedHsk != null ? `${b.nativeMovedHsk} HSK (tx.value sum)` : "";
+            const gas = b.gasUsedRatio ? ` · block gas ${b.gasUsedRatio}` : "";
+            return `${i + 1}. Block ${num} — ${txs}${vol ? ` · ${vol}` : ""}${gas}`;
+        });
+        const baseFee =
+            d.latestBaseFeeGwei != null
+                ? `\n- Latest base fee (EIP-1559): **${Number(d.latestBaseFeeGwei).toLocaleString(undefined, { maximumFractionDigits: 4 })} gwei**`
+                : "";
+        const host = d.rpcHost ? ` · RPC **${d.rpcHost}**` : "";
+        sections.push(
+            `**HashKey chain pulse** (live JSON-RPC${host})\n` +
+                `- **chainId ${d.chainId ?? "?"}** · head **#${d.latestBlock}** · sampled **${d.windowBlocks ?? rows.length}** blocks · **${d.totalTxs ?? "?"}** txs in window · **${d.windowNativeMovedHsk ?? "?"}** native HSK in \`tx.value\`${baseFee}\n` +
+                (lines.length ? `\n**Blocks**\n${lines.join("\n")}` : "") +
+                (d.note ? `\n\n_${String(d.note)}_` : "")
+        );
     }
 
     if (hasKey("getYields")) {
@@ -552,11 +724,41 @@ function slugKeyPart(input: string, maxLen = 48): string {
     return base || "q";
 }
 
+/** Normalized lower prompt for routing (shared by fastRouteTools + backfill guards). */
+function routingNorm(prompt: string): string {
+    return (prompt || "")
+        .toLowerCase()
+        .replace(/[?!.]+/g, " ")
+        .replace(/\s+/g, " ")
+        .trim();
+}
+
+/**
+ * User wants live HashKey testnet chain data (blocks / gas / activity), not generic web docs.
+ * Keep in sync with getHashKeyPulse routing in fastRouteTools.
+ */
+function wantsHashKeyChainPulseIntent(sNorm: string): boolean {
+    const hkPulseTerms =
+        /\b(pulse|activity|recent\s+blocks?|last(?:\s+\d{1,2})?\s+blocks?|block\s+height|network\s+stats?|gas|base\s*fee|chain\s+liveness|on[-\s]?chain|transactions?|tx\s+counts?|native\s+hsk|moving\s+on[-\s]?chain|liveness|healthy)\b/;
+    return (
+        (/\bhashkey\b|\bhsk\s+testnet\b|\bhashkey\s+testnet\b/.test(sNorm) && hkPulseTerms.test(sNorm)) ||
+        /\b(pulse|chain\s+activity|on[-\s]?chain\s+pulse)\b.*\b(hashkey|hsk\s+testnet)\b/.test(sNorm) ||
+        /\bwhat'?s\s+happening\s+on\s+(the\s+)?hashkey\s+chain\b/.test(sNorm) ||
+        /\brecent\s+transactions?\s+on\s+hashkey\b/.test(sNorm) ||
+        /\b(live\s+)?chain\s+pulse\b.*\b(hashkey|hsk|testnet)\b/.test(sNorm) ||
+        /\b(hashkey|hsk\s+testnet)\b.*\b(live\s+)?chain\s+pulse\b/.test(sNorm)
+    );
+}
+
+function pulseToolDataSucceeded(node: any): boolean {
+    return !!(node && !node.error && (node.chainId != null || node.latestBlock != null));
+}
+
 function fastRouteTools(prompt: string): RoutedToolCall[] {
     const q = (prompt || "").trim();
     const t = q;
     const s = q.toLowerCase();
-    const sNorm = s.replace(/[?!.]+/g, " ").replace(/\s+/g, " ").trim();
+    const sNorm = routingNorm(q);
     const tools: RoutedToolCall[] = [];
 
     if (!t) return [];
@@ -574,7 +776,9 @@ function fastRouteTools(prompt: string): RoutedToolCall[] {
                   ? String((args as any)?.protocol || "").toLowerCase()
                   : name === "getChainAccount"
                     ? String((args as any)?.address || "").toLowerCase()
-                    : name === "searchWeb"
+                    : name === "getHashKeyPulse"
+                      ? String((args as any)?.depth ?? "5")
+                      : name === "searchWeb"
                       ? String((args as any)?.query || "").toLowerCase()
                       : name === "getNews"
                         ? `${String((args as any)?.category || "all")}:${String((args as any)?.query || "").toLowerCase()}`
@@ -619,6 +823,14 @@ function fastRouteTools(prompt: string): RoutedToolCall[] {
         add("getPriceData", { symbol: mentionedTickers[0] });
     }
 
+    // HashKey testnet — live chain pulse (JSON-RPC)
+    const wantsHashKeyPulse = wantsHashKeyChainPulseIntent(sNorm);
+    if (wantsHashKeyPulse) {
+        const dMatch = sNorm.match(/\b(?:last|past|recent)\s+(\d{1,2})\s+blocks?\b/);
+        const depth = dMatch ? Math.min(20, Math.max(1, parseInt(dMatch[1], 10))) : 5;
+        add("getHashKeyPulse", { depth });
+    }
+
     // HashKey / HSK context
     if (/\bhashkey\b|\bhsk\b|\becopoints\b|\bhash\s*key\b/.test(sNorm)) {
         add("getPriceData", { symbol: "hsk" });
@@ -642,8 +854,8 @@ function fastRouteTools(prompt: string): RoutedToolCall[] {
         add("getPriceData", { symbol: "hsk" });
     }
 
-    // Oracle (company vs on-chain oracle) — web research first
-    if (/\boracle\b/.test(sNorm) && !/\b0x[a-f0-9]{40}\b/.test(q)) {
+    // Oracle (company vs on-chain oracle) — web research first (never hijack HashKey chain-pulse RPC questions)
+    if (/\boracle\b/.test(sNorm) && !/\b0x[a-f0-9]{40}\b/.test(q) && !wantsHashKeyChainPulseIntent(sNorm)) {
         add("searchWeb", { query: q });
         add("getNews", { query: "oracle", category: "all" as any });
     }
@@ -821,13 +1033,38 @@ async function handleGetChainAccount(address: string, receiptSink?: (agentId: st
     };
 }
 
+async function handleGetHashKeyPulse(
+    depthArg: number | undefined,
+    receiptSink?: (agentId: string, txHash: string) => void
+): Promise<{ data: string; txHash?: string }> {
+    const depth = Math.min(20, Math.max(1, depthArg ?? 5));
+    console.log(`[Gemini] ⛓️ HashKey chain pulse (depth=${depth})...`);
+    const cfg = loadHashkeyConfigFromEnv();
+    const payP = createChainScoutPayment(`pulse:${depth}`);
+    void payP.then((h) => { if (h) receiptSink?.("chain-scout", h); }).catch(() => {});
+    try {
+        const pulse = await fetchHashKeyChainPulse({ cfg, depth });
+        const txHash = await withTimeoutOptional(payP, 200);
+        return { data: JSON.stringify(pulse), txHash };
+    } catch (e: any) {
+        const msg = String(e?.message || e || "rpc_error");
+        return {
+            data: JSON.stringify({
+                error: msg,
+                hint: "Verify HASHKEY_RPC_URL and HASHKEY_CHAIN_ID (133) in kairos-backend/.env.",
+            }),
+        };
+    }
+}
+
 const SYSTEM_PROMPT_COMPACT = `You are Kairos (crypto + HashKey Chain assistant). Choose the right tools, then answer concisely using tool results.
 
 Tool routing:
 - Prices/ATH/market cap: getPriceData
 - Headlines: getNews
 - DeFi yields: getYields
-- HashKey/EVM account facts (0x...): getChainAccount
+- HashKey testnet activity (recent blocks, gas, native HSK in motion): getHashKeyPulse
+- HashKey/EVM account facts (0x...): getChainAccount (for “explain / analyze / review my wallet”, same tool — the app adds risks + next actions)
 - DEX volumes (per chain): getDexVolumes
 - Bridges/cross-chain: getBridges
 - Protocol TVL/fees: getProtocolStats
@@ -850,7 +1087,9 @@ You facilitate a multi-agent economy where agents can pay each other on-chain us
 - Only the tools you actually call determine which specialist answered. Do not pretend to be "Price Oracle" unless you called getPriceData.
 - For **"why is X dumping/pumping?", market analysis, current events, macroeconomic or regulatory explainers**: use **searchWeb** (live web index when TAVILY_API_KEY / BRAVE_SEARCH_API_KEY is configured; otherwise it is an offline model summary) — not getNews alone.
 - For **crypto news headlines, "latest crypto news", breaking stories**: call **getNews** (RSS headlines from major outlets).
+- For **HashKey testnet chain pulse** (recent blocks, tx counts, base fee, native HSK moved in tx.value): call **getHashKeyPulse** (optional depth 1–20).
 - For **HashKey/EVM account facts** (balance/nonce/contract detection): call **getChainAccount** with an 0x address.
+- For **“explain my wallet” / analyze this address / risks** (with an 0x): call **getChainAccount**; the deployment adds a grounded **Risks** + **Next actions** section from that output.
 - For **prices, ATH, market cap, "how much is X"**: call **getPriceData**.
 - For **DEX volumes / top DEXs**: call **getDexVolumes**.
 - For **"which bridge", "how to bridge", "bridge ETH to HSK", "convert across chains", "cross-chain transfer", "move funds between chains"**: call **getBridges** to surface real bridge options, then answer using that data.
@@ -867,7 +1106,7 @@ You facilitate a multi-agent economy where agents can pay each other on-chain us
 
 **Your Capabilities:**
 - PRICE ORACLE: Real-time prices for any crypto (HSK, USDC, BTC, ETH, etc.) via CoinGecko.
-- CHAIN SCOUT: HashKey/EVM account facts (balance, nonce, contract detection).
+- CHAIN SCOUT: HashKey testnet chain pulse (live blocks via RPC) and 0x account facts (balance, nonce, contract detection).
 - NEWS SCOUT: Real-time crypto news and sentiment analysis.
 - PERP STATS: Perpetual futures funding rates, open interest, and volume.
 - PROTOCOL STATS: DeFi protocol TVL, fees, and revenue via DeFiLlama.
@@ -1102,13 +1341,30 @@ const getDexVolumesFunction = {
 
 const getChainAccountFunction = {
     name: "getChainAccount",
-    description: "Get basic HashKey/EVM account facts: balance, nonce, whether it is a contract. Use when users paste an 0x address.",
+    description:
+        "Get basic HashKey/EVM account facts: native balance, nonce, whether it is a contract. Use when users paste an 0x address, ask to explain/analyze/review a wallet, or say 'my wallet' with an address.",
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
             address: { type: SchemaType.STRING, description: "EVM address starting with 0x" },
         },
         required: ["address"],
+    },
+};
+
+const getHashKeyPulseFunction = {
+    name: "getHashKeyPulse",
+    description:
+        "Live HashKey Chain testnet pulse via JSON-RPC: latest block, recent block summaries (tx count, gas used ratio, sum of native tx.value per block), chainId, optional EIP-1559 base fee. Use for HashKey testnet activity, 'what is happening on chain', recent blocks, or network health (not token prices).",
+    parameters: {
+        type: SchemaType.OBJECT,
+        properties: {
+            depth: {
+                type: SchemaType.NUMBER,
+                description: "How many recent blocks to sample from chain head (1–20, default 5).",
+            },
+        },
+        required: [],
     },
 };
 
@@ -1200,6 +1456,7 @@ async function handleSearchWeb(
             answer: searchResult.answer,
             liveWeb: searchResult.liveWeb,
             provider: searchResult.provider,
+            fetchedAt: searchResult.fetchedAt,
             sources: searchResult.results.map((r) => ({
                 title: r.title,
                 url: r.url,
@@ -1799,6 +2056,17 @@ export async function generateResponse(
                 if (r.txHash) txHashes["chain-scout"] = r.txHash;
                 return { key: resultKey, name: call.name, raw: r.data };
             }
+            if (call.name === "getHashKeyPulse") {
+                agentsUsed.add("chain-scout");
+                const rawDepth = (call.args as { depth?: number })?.depth;
+                const depth =
+                    typeof rawDepth === "number" && Number.isFinite(rawDepth)
+                        ? Math.min(20, Math.max(1, Math.floor(rawDepth)))
+                        : undefined;
+                const r = await withTimeout(handleGetHashKeyPulse(depth, receiptSink), perCallTimeout);
+                if (r.txHash) txHashes["chain-scout"] = r.txHash;
+                return { key: resultKey, name: call.name, raw: r.data };
+            }
 
             return { key: resultKey, name: call.name, raw: JSON.stringify({ error: `Unknown tool: ${call.name}` }) };
         } catch (e: any) {
@@ -1852,10 +2120,11 @@ export async function generateResponse(
                 }
                 const rendered = renderFastFromTools(lastToolResultsByName);
                 if (rendered) {
-                    const synthesized = await synthesizeGroundedAnswer(prompt || "", lastToolResultsByName);
-                    const responseTextOut = (synthesized || rendered).trim();
+                    const responseTextOut = (
+                        await composeFastToolAnswer(prompt || "", routed, lastToolResultsByName)
+                    ).trim();
                     console.log(
-                        `[FastMode] ${synthesized ? "synthesized" : "rendered"} from tools in ${Date.now() - t0}ms (tools=${routed
+                        `[FastMode] composed from tools in ${Date.now() - t0}ms (tools=${routed
                             .map((r) => r.name)
                             .join(",")})`
                     );
@@ -1894,6 +2163,7 @@ export async function generateResponse(
             toTool(getPerpMarketsFunction),
             toTool(getDexVolumesFunction),
             toTool(getChainAccountFunction),
+            toTool(getHashKeyPulseFunction),
         ];
 
         const messages: GroqChatMessage[] = [{ role: "system", content: SYSTEM_PROMPT }];
@@ -1952,8 +2222,14 @@ export async function generateResponse(
             if (FAST_MODE) {
                 const rendered = renderFastFromTools(lastToolResultsByName);
                 if (rendered) {
-                    const synthesized = await synthesizeGroundedAnswer(prompt || "", lastToolResultsByName);
-                    const responseTextOut = (synthesized || rendered).trim();
+                    const routedForCompose: RoutedToolCall[] = completion.toolCalls.map((tc) => ({
+                        key: tc.function.name,
+                        name: tc.function.name,
+                        args: {},
+                    }));
+                    const responseTextOut = (
+                        await composeFastToolAnswer(prompt || "", routedForCompose, lastToolResultsByName)
+                    ).trim();
                     return {
                         response: stripInlineRagCitations(responseTextOut),
                         agentsUsed: Array.from(agentsUsed),
@@ -2028,7 +2304,8 @@ export async function generateResponse(
                     `- **24h change**: ${change}\n` +
                     `- **Market cap**: ${mcap}\n` +
                     `- **24h volume**: ${vol}\n` +
-                    `- **All-time high (ATH)**: ${ath} (reached ${athDate})`,
+                    `- **All-time high (ATH)**: ${ath} (reached ${athDate})\n\n` +
+                    `**Last updated:** ${formatMarketLastUpdated(d.lastUpdated)}`,
                 agentsUsed: Array.from(agentsUsed),
                 txHashes,
                 a2aPayments: currentA2APayments,
@@ -2113,19 +2390,45 @@ export async function generateResponse(
 
         // If Groq answered without invoking tools, backfill specialists so telemetry + UI stay honest.
         // When FAST_MODE is on, deterministic routing already ran first; skip this to avoid double-fetching.
-        if (!FAST_MODE && agentsUsed.size === 0 && (prompt || "").trim().length >= 2) {
+        // When GROQ_TOOL_CALLING=1, the model may call searchWeb for a chain-pulse question — still inject RPC tools.
+        const sNormBack = routingNorm(prompt || "");
+        const pulseIntent = wantsHashKeyChainPulseIntent(sNormBack);
+        const pulseDone = pulseToolDataSucceeded(firstMatchingToolNode(lastToolResultsByName, "getHashKeyPulse"));
+        const shouldToolBackfill =
+            !FAST_MODE &&
+            (prompt || "").trim().length >= 2 &&
+            (agentsUsed.size === 0 || (pulseIntent && !pulseDone));
+
+        if (shouldToolBackfill) {
             const routed = fastRouteTools(prompt || "");
             if (routed.length) {
-                const bundle: Record<string, any> = {};
-                await Promise.all(
-                    routed.map(async (c) => {
-                        const r = await executeToolCall(c);
-                        bundle[r.key] = wrapToolResult(r.raw);
-                    })
-                );
+                let bundle: Record<string, any>;
+                if (agentsUsed.size > 0 && pulseIntent && !pulseDone) {
+                    // Model already ran tools (e.g. searchWeb under GROQ_TOOL_CALLING=1) — only add missing RPC pulse
+                    // to avoid duplicate treasury payments for news/search.
+                    bundle = { ...lastToolResultsByName };
+                    const dMatch = sNormBack.match(/\b(?:last|past|recent)\s+(\d{1,2})\s+blocks?\b/);
+                    const depth = dMatch ? Math.min(20, Math.max(1, parseInt(dMatch[1], 10))) : 5;
+                    const pulseSig = String(depth);
+                    const pulseCall: RoutedToolCall = {
+                        key: `getHashKeyPulse:${slugKeyPart(pulseSig)}`,
+                        name: "getHashKeyPulse",
+                        args: { depth },
+                    };
+                    const r = await executeToolCall(pulseCall);
+                    bundle[r.key] = wrapToolResult(r.raw);
+                } else {
+                    bundle = {};
+                    await Promise.all(
+                        routed.map(async (c) => {
+                            const r = await executeToolCall(c);
+                            bundle[r.key] = wrapToolResult(r.raw);
+                        })
+                    );
+                }
                 const rendered = renderFastFromTools(bundle);
-                const synthesized = await synthesizeGroundedAnswer(prompt || "", bundle);
-                const out = (synthesized || rendered || "").trim();
+                const composed = (await composeFastToolAnswer(prompt || "", routed, bundle)).trim();
+                const out = composed || (rendered ? rendered.trim() : "");
                 if (out) {
                     const usedAgents = Array.from(agentsUsed);
                     if (usedAgents.length >= 2) {
@@ -2175,8 +2478,9 @@ export async function generateResponse(
                     );
                     const rendered = renderFastFromTools(lastToolResultsByName);
                     if (rendered) {
-                        const synthesized = await synthesizeGroundedAnswer(prompt || "", lastToolResultsByName);
-                        const responseTextOut = (synthesized || rendered).trim();
+                        const responseTextOut = (
+                            await composeFastToolAnswer(prompt || "", routed, lastToolResultsByName)
+                        ).trim();
                         return {
                             response: stripInlineRagCitations(responseTextOut),
                             agentsUsed: Array.from(agentsUsed),

@@ -1,4 +1,4 @@
-import 'dotenv/config';
+import "./load-env.js";
 import express from "express";
 import cors from "cors";
 import rateLimit from "express-rate-limit";
@@ -6,6 +6,7 @@ import axios from "axios";
 import path from "path";
 import { fileURLToPath } from "url";
 import { generateResponse, initGemini } from "./services/gemini.js";
+import { logWebSearchConfigOnce } from "./services/search.js";
 import { warmRagIndex } from "./services/rag.js";
 import { ethers } from "ethers";
 import { getHskBalance } from "./services/hashkey-chain.js";
@@ -214,6 +215,8 @@ app.use(generalLimiter);
 app.use(express.json({ limit: '50mb' }));
 
 // --- Initialization ---
+
+logWebSearchConfigOnce();
 
 // Initialize AI
 if (GROQ_API_KEY) {
@@ -427,7 +430,7 @@ app.get("/providers", async (req, res) => {
             { id: "news", name: "News Scout", category: "Analytics", description: "Crypto news & sentiment analysis. Breaking news, trending topics, and market-moving events.", price: "0.001" },
             { id: "yield", name: "Yield Optimizer", category: "DeFi", description: "Best DeFi yields across 500+ protocols. Filter by chain, APY, and TVL for optimal returns.", price: "0.001" },
             { id: "tokenomics", name: "Tokenomics Analyzer", category: "Analytics", description: "Token supply, distribution & unlock schedules. Inflation models and emission analysis.", price: "0.001" },
-            { id: "chain-scout", name: "Chain Scout", category: "Infrastructure", description: "HashKey/EVM account facts (balance, nonce, contract detection) and chain-level context.", price: "0.001" },
+            { id: "chain-scout", name: "Chain Scout", category: "Infrastructure", description: "HashKey testnet chain pulse (recent blocks, gas, native HSK in motion) and 0x account facts.", price: "0.001" },
             { id: "perp", name: "Perp Stats", category: "Trading", description: "Perpetual futures data from 7+ exchanges. Funding rates, open interest, and volume analysis.", price: "0.001" },
             { id: "protocol", name: "Protocol Stats", category: "DeFi", description: "TVL, fees & revenue for 100+ DeFi protocols via DeFiLlama. Cross-chain protocol comparisons.", price: "0.001" },
             { id: "bridges", name: "Bridge Monitor", category: "DeFi", description: "Cross-chain bridge volumes and activity. Track capital flows across chains.", price: "0.001" },
