@@ -83,7 +83,9 @@ export function ActivityFeed({ agentId }: ActivityFeedProps) {
           activities.map((activity) => {
             const nominal = activity.nominalUsd ?? activity.amount ?? 0.001;
             const ageMs = Date.now() - new Date(activity.timestamp).getTime();
-            const isVeryRecent = ageMs < 2 * 60 * 1000;
+            /** Show "confirming" only briefly; missing txHash after this is a failed or untracked settlement, not success. */
+            const confirmingWindowMs = 90 * 1000;
+            const showConfirming = !activity.txHash && ageMs < confirmingWindowMs;
             const isDebit = activity.direction === 'debit';
             const onChainAmt = activity.onChain
               ? `${activity.onChain.amount} ${activity.onChain.code}`
@@ -142,13 +144,16 @@ export function ActivityFeed({ agentId }: ActivityFeedProps) {
                     <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-80" />
                     <span className="sr-only">Open transaction on HashKey explorer</span>
                   </a>
-                ) : isVeryRecent ? (
+                ) : showConfirming ? (
                   <span className="text-[10px] text-muted-foreground/70 text-right animate-pulse">
                     Confirming on-chain…
                   </span>
                 ) : (
-                  <span className="text-[10px] text-emerald-400/60 text-right">
-                    ✓ Settled
+                  <span
+                    className="text-[10px] text-amber-500/85 text-right leading-snug max-w-[220px]"
+                    title="No tx hash was logged for this entry. Often treasury → agent failed (e.g. spending policy revert) or the hash arrived after the UI snapshot."
+                  >
+                    No on-chain receipt logged
                   </span>
                 )}
               </div>

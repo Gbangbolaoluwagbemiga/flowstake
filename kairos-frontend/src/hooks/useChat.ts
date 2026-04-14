@@ -92,7 +92,7 @@ export function useChat() {
       // Fast receipts: poll briefly for real tx hashes without slowing responses.
       if (data?.agentsUsed?.length) {
         const start = Date.now();
-        const maxMs = 20000;
+        const maxMs = 60000;
         const poll = async () => {
           if (Date.now() - start > maxMs) return;
           try {

@@ -1,21 +1,28 @@
 # Kairos — HashKey Agentic Marketplace
 
-> **Multi-agent AI marketplace where agents don't just talk — they buy, sell, coordinate, and earn on HashKey Chain.**
+> **Multi-agent AI for crypto & DeFi on HashKey Chain (EVM): routed specialists, tool-grounded answers, and native HSK settlement — with optional on-chain spending policy.**
 
-Rebuilt for the **HashKey Chain Horizon Hackathon 2026** | [Live Demo](https://kairos-chatbox.vercel.app/) | [Video Walkthrough](https://www.loom.com/share/ffccc293cac9406aa178c2761097d462)
+
+### GitHub “About” (copy into **Settings → General → About**)
+
+**Website:** your production URL (e.g. `https://kairos-hashkey.vercel.app`)
+
+**Topics** (paste as tags on the same About panel):
+
+`hashkey-chain` `hashkey` `hsk` `evm` `defi` `ai-agents` `multi-agent` `typescript` `react` `solidity` `groq` `foundry` `micropayments`
 
 ---
 
 ## What Kairos Does
 
-Kairos solves the "last mile" problem for AI agents: **payments + policies**. Agents can reason and plan, but they hit a wall when they need to pay for APIs, tools, or data. On Kairos, every agent query triggers **real on-chain HSK micropayments on HashKey Chain** — agents earn for their work, pay sub-agents for coordination, and build on-chain reputation.
+Kairos is the **agent + money** layer for crypto copilots: specialists fetch real market structure (prices, headlines, TVL, yields, bridges, perps), an orchestrator keeps answers **grounded in tool output**, and **treasury → agent** flows use **native HSK** on HashKey testnet—with **agent-to-agent (A2A)** demos when multiple specialists coordinate.
 
 **Key differentiators:**
-- ✅ **Native HSK micropayments** — Every agent call settles on-chain
+- ✅ **Native HSK micropayments** — Treasury pays agent owners per specialist invocation (when settlement succeeds)
 - ✅ **Agent-to-agent (A2A) commerce** — Agents pay each other for sub-tasks
-- ✅ **On-chain registry** — 9 agents registered on an EVM smart contract
-- ✅ **Auditable** — All payments visible on HashKey Explorer with clickable tx hashes
-- ✅ **Multi-agent orchestration** — Gemini routes queries to specialist agents
+- ✅ **On-chain registry** — Nine agents resolvable from `AgentRegistry` + env fallbacks
+- ✅ **Auditable** — Explorer links for successful transfers; receipts API for late hashes
+- ✅ **Deterministic routing + Groq** — Tool-first paths for reliability; optional live web index (Tavily / Brave) when API keys are set
 
 **9 specialist agents:**
 
@@ -42,8 +49,8 @@ kairos-backend/      Node.js + Express + TypeScript (deployed on Railway)
     index.ts              API routes, activity feed, treasury endpoints
     config.ts             All agent addresses, network config, pricing
     services/
-      gemini.ts           AI orchestrator (Groq) — tool routing, on-chain payments
-      search.ts           Google Search grounding (Gemini 2.0 Flash)
+      gemini.ts           AI orchestrator (Groq) — routing, synthesis, on-chain payments
+      search.ts           Web research (Tavily / Brave when configured; honest Groq fallback)
       agent-registry-evm.ts EVM agent registry reader (on-chain + env fallback)
       price-oracle.ts     CoinGecko integration
       news-scout.ts       Crypto RSS headlines
@@ -113,6 +120,7 @@ Frontend runs at `http://localhost:5173`, backend at `http://localhost:3001`.
 | `HASHKEY_CHAIN_ID` | `133` |
 | `KAIROS_AGENT_REGISTRY_EVM_ADDRESS` | Deployed `AgentRegistry` address |
 | `KAIROS_SPENDING_POLICY_EVM_ADDRESS` | Deployed `SpendingPolicy` address (optional) |
+| `KAIROS_SPENDING_POLICY_STRICT` | `1` = block payout if `canSpend` reverts. Default `0` = still pay (direct treasury transfer) when the policy call reverts — fixes stuck “Confirming” when ABI/policy mismatches. |
 
 **Server config:**
 

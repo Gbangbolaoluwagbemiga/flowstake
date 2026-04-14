@@ -6,7 +6,7 @@ import type { GroqChatMessage, GroqTool } from "./groq-client.js";
 import { groqChatComplete } from "./groq-client.js";
 import { fetchPrice, PriceData } from "./price-oracle.js";
 import { perpStatsService } from "./perp-stats/PerpStatsService.js";
-import { searchWeb as groqSearch } from "./search.js";
+import { searchWeb as runWebResearch } from "./search.js";
 import * as defillama from "./defillama.js";
 import * as newsScout from "./news-scout.js";
 import * as yieldOptimizer from "./yield-optimizer.js";
@@ -282,6 +282,56 @@ const FAST_MODE = (process.env.KAIROS_FAST_MODE || "1").trim() !== "0";
 // Groq tool-calling has proven unreliable (sometimes emits <function=...> tags → HTTP 400 tool_use_failed).
 // Default: OFF. We do deterministic tool routing instead.
 const GROQ_TOOL_CALLING = (process.env.KAIROS_GROQ_TOOL_CALLING || "0").trim() === "1";
+/** When enabled, run one extra Groq pass that must stay grounded in tool JSON (prices/headlines/snippets). */
+const GROUNDED_SYNTHESIS = (process.env.KAIROS_GROUNDED_SYNTHESIS || "1").trim() !== "0";
+
+function bundleToolJsonForSynthesis(toolJson: Record<string, any>): string {
+    try {
+        const raw = JSON.stringify(toolJson ?? {});
+        const max = Math.max(4000, Number(process.env.KAIROS_SYNTHESIS_MAX_JSON || 32000) || 32000);
+        return raw.length > max ? `${raw.slice(0, max)}\n...(truncated)` : raw;
+    } catch {
+        return "{}";
+    }
+}
+
+async function synthesizeGroundedAnswer(userPrompt: string, toolJson: Record<string, any>): Promise<string | null> {
+    if (!GROUNDED_SYNTHESIS) return null;
+    if (!Object.keys(toolJson || {}).length) return null;
+    try {
+        const completion = await groqChatComplete({
+            messages: [
+                {
+                    role: "system",
+                    content:
+                        "You are Kairos (crypto + HashKey Chain). Write the final user-facing answer.\n\n" +
+                        "HARD RULES:\n" +
+                        "- Use ONLY facts supported by TOOL_JSON. If TOOL_JSON does not contain a fact, do not assert it.\n" +
+                        "- For ANY numeric token price, market cap, TVL, volume, or percentage: quote ONLY from tool outputs that contain that number (usually getPriceData:*). Never guess prices.\n" +
+                        "- If a searchWeb entry has liveWeb:false, label that section clearly as an offline model summary (not verified against a live web index).\n" +
+                        "- If a searchWeb entry has liveWeb:true, summarize using the provided titles/URLs/snippets; do not invent new URLs.\n" +
+                        "- If tools conflict, say what differs and what you would verify next (one sentence).\n" +
+                        "- Do not mention payments, agents, internal routing, 'tools', or 'JSON'.\n" +
+                        "- Length: ~10–22 short lines unless the user asks for extreme detail.",
+                },
+                {
+                    role: "user",
+                    content: `USER_QUESTION:\n${(userPrompt || "").trim()}\n\nTOOL_JSON:\n${bundleToolJsonForSynthesis(toolJson)}`,
+                },
+            ],
+            tools: undefined,
+            toolChoice: "none",
+            temperature: 0.15,
+            maxTokens: 950,
+            timeoutMs: Math.min(24000, Math.max(8000, Number(process.env.KAIROS_SYNTHESIS_TIMEOUT_MS || 18000) || 18000)),
+        });
+        const text = (completion.content || "").trim();
+        return text.length >= 60 ? text : null;
+    } catch (e: any) {
+        console.warn("[Kairos] Grounded synthesis skipped:", e?.message || e);
+        return null;
+    }
+}
 
 function stripInlineRagCitations(text: string): string {
     if (!text) return text;
@@ -295,41 +345,84 @@ function stripInlineRagCitations(text: string): string {
     return cleaned;
 }
 
+type RoutedToolCall = { key: string; name: string; args: any };
+
+function toolResultKeys(last: Record<string, any>, toolName: string): string[] {
+    return Object.keys(last)
+        .filter((k) => k === toolName || k.startsWith(`${toolName}:`))
+        .sort();
+}
+
 function renderFastFromTools(last: Record<string, any>): string | null {
     const sections: string[] = [];
 
-    const has = (k: string) => last[k] && !last[k].error;
+    const hasKey = (k: string) => last[k] && !last[k].error;
 
-    if (has("getPriceData")) {
-        const d = last.getPriceData as any;
-        const sym = (d.symbol || "").toUpperCase();
-        const name = d.name || sym || "Token";
-        const price = d.price != null ? `$${Number(d.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}` : "N/A";
-        const change = d.change24h != null ? `${Number(d.change24h).toFixed(2)}%` : "N/A";
-        const athNum = d.ath != null ? Number(d.ath) : NaN;
-        const ath = Number.isFinite(athNum) ? `$${athNum.toLocaleString(undefined, { maximumFractionDigits: 6 })}` : "N/A";
-        const athDate = d.athDate ? new Date(d.athDate).toLocaleDateString() : "N/A";
-        const drawdown =
-            Number.isFinite(athNum) && Number.isFinite(Number(d.price)) && athNum > 0
-                ? `${(((Number(d.price) - athNum) / athNum) * 100).toFixed(1)}%`
-                : null;
-        sections.push(
-            `The current price of **${name} (${sym})** is **${price}**.\n\n` +
+    const priceKeys = toolResultKeys(last, "getPriceData");
+    if (priceKeys.length) {
+        const blocks = priceKeys.map((k) => {
+            const d = last[k] as any;
+            const sym = (d.symbol || "").toUpperCase();
+            const name = d.name || sym || "Token";
+            const price = d.price != null ? `$${Number(d.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}` : "N/A";
+            const change = d.change24h != null ? `${Number(d.change24h).toFixed(2)}%` : "N/A";
+            const athNum = d.ath != null ? Number(d.ath) : NaN;
+            const ath = Number.isFinite(athNum) ? `$${athNum.toLocaleString(undefined, { maximumFractionDigits: 6 })}` : "N/A";
+            const athDate = d.athDate ? new Date(d.athDate).toLocaleDateString() : "N/A";
+            const drawdown =
+                Number.isFinite(athNum) && Number.isFinite(Number(d.price)) && athNum > 0
+                    ? `${(((Number(d.price) - athNum) / athNum) * 100).toFixed(1)}%`
+                    : null;
+            return (
+                `The current price of **${name} (${sym})** is **${price}**.\n\n` +
                 `- 24h change: ${change}\n` +
                 `- Market cap: ${d.marketCap != null ? `$${Number(d.marketCap).toLocaleString()}` : "N/A"}\n` +
                 `- Volume (24h): ${d.volume24h != null ? `$${Number(d.volume24h).toLocaleString()}` : "N/A"}\n` +
                 `- ATH: ${ath} (reached ${athDate})` +
                 (drawdown ? `\n- vs ATH: ${drawdown}` : "")
-        );
+            );
+        });
+        sections.push(blocks.join("\n\n"));
     }
 
-    if (has("getNews") && (last.getNews?.articles?.length || last.getNews?.result?.articles?.length)) {
-        const articles = (last.getNews.articles || last.getNews.result?.articles || []).slice(0, 8);
+    const newsKeys = toolResultKeys(last, "getNews");
+    for (const nk of newsKeys) {
+        if (!hasKey(nk)) continue;
+        const node = last[nk] as any;
+        const articles = (node.articles || node.result?.articles || []).slice(0, 8);
+        if (!articles.length) continue;
         const lines = articles.map((a: any, i: number) => `${i + 1}. ${a.title}${a.source ? ` — ${a.source}` : ""}`);
         sections.push(`**Latest headlines**\n${lines.join("\n")}`);
     }
 
-    if (has("getBridges")) {
+    const searchKeys = toolResultKeys(last, "searchWeb");
+    for (const sk of searchKeys) {
+        if (!hasKey(sk)) continue;
+        const d = last[sk] as any;
+        const q = d.query ? String(d.query) : "";
+        const answer = d.answer != null ? String(d.answer) : "";
+        const sources = Array.isArray(d.sources) ? d.sources : [];
+        const srcLines = sources
+            .slice(0, 5)
+            .map((s: any, i: number) => `${i + 1}. ${s.title || "Source"}${s.url ? ` — ${s.url}` : ""}`)
+            .filter(Boolean);
+
+        if (answer) {
+            const mode =
+                d.liveWeb === true
+                    ? "Live web index"
+                    : d.liveWeb === false
+                      ? "Offline summary (set TAVILY_API_KEY or BRAVE_SEARCH_API_KEY for live web index)"
+                      : "Research";
+            const prov = d.provider ? ` · ${String(d.provider)}` : "";
+            sections.push(
+                `**${mode}${prov}${q ? ` — “${q}”` : ""}**\n\n${answer}` +
+                    (srcLines.length ? `\n\n**Sources**\n${srcLines.join("\n")}` : "")
+            );
+        }
+    }
+
+    if (hasKey("getBridges")) {
         const d = last.getBridges as any;
         const bridges =
             Array.isArray(d?.topBridges) ? d.topBridges :
@@ -350,7 +443,7 @@ function renderFastFromTools(last: Record<string, any>): string | null {
         }
     }
 
-    if (has("getYields")) {
+    if (hasKey("getYields")) {
         const d = last.getYields as any;
         const rows =
             (d?.opportunities ||
@@ -369,7 +462,7 @@ function renderFastFromTools(last: Record<string, any>): string | null {
         }
     }
 
-    if (has("getProtocolStats")) {
+    if (hasKey("getProtocolStats")) {
         const d = last.getProtocolStats as any;
         const name = d?.name || d?.result?.name || "Protocol";
         const tvl = d?.tvl ?? d?.result?.tvl;
@@ -380,7 +473,7 @@ function renderFastFromTools(last: Record<string, any>): string | null {
         );
     }
 
-    if (has("getTokenomics")) {
+    if (hasKey("getTokenomics")) {
         const d = last.getTokenomics as any;
         const sym = (d?.symbol || d?.result?.symbol || "").toUpperCase();
         const supply = d?.circulatingSupply ?? d?.result?.circulatingSupply;
@@ -390,7 +483,7 @@ function renderFastFromTools(last: Record<string, any>): string | null {
         );
     }
 
-    if (has("getGlobalPerpStats")) {
+    if (hasKey("getGlobalPerpStats")) {
         const d = last.getGlobalPerpStats as any;
         const oi = d?.totalOpenInterest ?? d?.result?.totalOpenInterest;
         const vol = d?.totalVolume24h ?? d?.result?.totalVolume24h;
@@ -399,7 +492,7 @@ function renderFastFromTools(last: Record<string, any>): string | null {
         );
     }
 
-    if (has("getPerpMarkets")) {
+    if (hasKey("getPerpMarkets")) {
         const d = last.getPerpMarkets as any;
         const markets = (d?.markets || d?.result?.markets || []).slice(0, 6);
         if (markets.length) {
@@ -408,7 +501,7 @@ function renderFastFromTools(last: Record<string, any>): string | null {
         }
     }
 
-    if (has("getHacks")) {
+    if (hasKey("getHacks")) {
         const d = last.getHacks as any;
         const hacks = (d?.recentHacks || d?.result?.recentHacks || []).slice(0, 6);
         if (hacks.length) {
@@ -417,7 +510,7 @@ function renderFastFromTools(last: Record<string, any>): string | null {
         }
     }
 
-    if (has("getTrending")) {
+    if (hasKey("getTrending")) {
         const d = last.getTrending as any;
         const topics = (d?.topics || d?.result?.topics || d?.trending || []).slice(0, 8);
         if (topics.length) {
@@ -426,69 +519,188 @@ function renderFastFromTools(last: Record<string, any>): string | null {
         }
     }
 
-    if (sections.length === 0) return null;
+    if (sections.length === 0) {
+        const keys = Object.keys(last || {}).filter(Boolean);
+        if (!keys.length) return null;
+
+        const lines = keys.slice(0, 6).map((k) => {
+            const node = last[k];
+            const err = node?.error;
+            const msg =
+                typeof err === "string"
+                    ? err
+                    : err && typeof err === "object"
+                      ? JSON.stringify(err)
+                      : "No renderable output";
+            return `- **${k}**: ${msg}`;
+        });
+        sections.push(
+            `I routed your question to specialist tools, but the live data sources didn’t return renderable results in time.\n\n**Details**\n${lines.join("\n")}\n\nTry again in a moment, or ask a narrower version (e.g., a single ticker, tx hash, or protocol name).`
+        );
+    }
     return stripInlineRagCitations(sections.join("\n\n"));
 }
 
-function fastRouteTools(prompt: string): Array<{ name: string; args: any }> {
+function slugKeyPart(input: string, maxLen = 48): string {
+    const base = (input || "")
+        .toLowerCase()
+        .replace(/https?:\/\/\S+/g, " ")
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/-+/g, "-")
+        .replace(/^-|-$/g, "")
+        .slice(0, maxLen);
+    return base || "q";
+}
+
+function fastRouteTools(prompt: string): RoutedToolCall[] {
     const q = (prompt || "").trim();
+    const t = q;
     const s = q.toLowerCase();
-    const tools: Array<{ name: string; args: any }> = [];
+    const sNorm = s.replace(/[?!.]+/g, " ").replace(/\s+/g, " ").trim();
+    const tools: RoutedToolCall[] = [];
+
+    if (!t) return [];
+
+    // Pure greetings should still hit a specialist agent (headline pulse), so the UI always shows routing.
+    const GREETING_ONLY =
+        /^\s*(hi|hey|hello|gm|good\s+morning|good\s+afternoon|good\s+evening|thanks|thank\s+you|ty|yo)(\s*[,.!])*$/i;
+    const isPureGreeting = GREETING_ONLY.test(t) && t.length <= 64;
 
     const add = (name: string, args: any) => {
-        if (!tools.some((t) => t.name === name)) tools.push({ name, args });
+        const sig =
+            name === "getPriceData"
+                ? String((args as any)?.symbol || "").toLowerCase()
+                : name === "getProtocolStats"
+                  ? String((args as any)?.protocol || "").toLowerCase()
+                  : name === "getChainAccount"
+                    ? String((args as any)?.address || "").toLowerCase()
+                    : name === "searchWeb"
+                      ? String((args as any)?.query || "").toLowerCase()
+                      : name === "getNews"
+                        ? `${String((args as any)?.category || "all")}:${String((args as any)?.query || "").toLowerCase()}`
+                        : name === "getYields"
+                          ? JSON.stringify(args || {})
+                          : "";
+        const key = `${name}:${slugKeyPart(sig || name)}`;
+        if (!tools.some((t) => t.key === key)) tools.push({ key, name, args });
     };
 
+    if (isPureGreeting) {
+        add("getNews", { category: "all" });
+        return tools;
+    }
+
+    const KNOWN_TICKERS = new Set([
+        "btc","eth","sol","bnb","xrp","ada","doge","dot","avax","matic","pol","link","ltc","bch","atom","near","op","arb","hsk","usdc","usdt","dai","wbtc","weth","crv","aave","uni","mkr","ldo","grt","snx","inj","tia","sei","sui","apt","ondo",
+    ]);
+
+    const mentionedTickers = Array.from(
+        new Set(
+            (sNorm.match(/\b[a-z]{2,10}\b/g) || [])
+                .filter((t) => KNOWN_TICKERS.has(t))
+        )
+    );
+
     // Bridges / cross-chain
-    if (/\bbridge(s|ing)?\b|\bcross[-\s]?chain\b|\bmove\s+assets?\b|\beth\s+to\s+stellar\b|\beth\s+to\s+xlm\b/.test(s)) {
+    if (/\bbridge(s|ing)?\b|\bcross[-\s]?chain\b|\bmove\s+assets?\b|\beth\s+to\s+stellar\b|\beth\s+to\s+xlm\b/.test(sNorm)) {
         add("getBridges", {});
     }
 
     // Price / ATH
     const parenSym = (q.match(/\(([A-Za-z0-9]{2,10})\)/)?.[1] || "").trim();
-    const priceMatch = s.match(
+    const priceMatch = sNorm.match(
         /\bprice\b.*\bof\b\s+([a-z0-9]{2,10})\b|\bhow\s+much\s+is\b\s+([a-z0-9]{2,10})\b|\bcurrent\s+price\b.*\b([a-z0-9]{2,10})\b|\bath\b.*\b([a-z0-9]{2,10})\b|\ball[-\s]?time\s+high\b.*\b([a-z0-9]{2,10})\b/
     );
     const sym = (parenSym || priceMatch?.[1] || priceMatch?.[2] || priceMatch?.[3] || priceMatch?.[4] || priceMatch?.[5] || "").trim();
     if (sym) add("getPriceData", { symbol: sym });
 
-    // News
-    if (/\b(latest|breaking|news|headlines)\b/.test(s)) {
-        add("getNews", { category: /\bbreaking\b/.test(s) ? "breaking" : /\bdefi\b/.test(s) ? "defi" : /\bbitcoin\b|\bbtc\b/.test(s) ? "bitcoin" : "all" });
+    // Explicit ticker mentions (even without the word "price")
+    if (!sym && mentionedTickers.length === 1) {
+        add("getPriceData", { symbol: mentionedTickers[0] });
     }
 
-    const wantsYields = /\byield(s)?\b|\bapy\b|\bearn\b/.test(s);
+    // HashKey / HSK context
+    if (/\bhashkey\b|\bhsk\b|\becopoints\b|\bhash\s*key\b/.test(sNorm)) {
+        add("getPriceData", { symbol: "hsk" });
+    }
+
+    // News
+    if (/\b(latest|breaking|news|headlines)\b/.test(sNorm)) {
+        add("getNews", { category: /\bbreaking\b/.test(sNorm) ? "breaking" : /\bdefi\b/.test(sNorm) ? "defi" : /\bbitcoin\b|\bbtc\b/.test(sNorm) ? "bitcoin" : "all" });
+    }
+
+    // "What's going on" + market pulse questions
+    if (
+        /\b(market|crypto)\b.*\b(condition|conditions|outlook|environment|situation)\b/.test(sNorm) ||
+        /\bmarket\s+sentiment\b|\bmacro\b|\bregulation\b|\bsec\b|\betf\b|\bwhat\s+happened\b|\bwhy\s+is\b|\bdumping\b|\bpumping\b|\bcrash(ed|ing)?\b|\brally\b/.test(sNorm) ||
+        /\b(current|today|right\s+now)\b.*\b(crypto|market)\b/.test(sNorm)
+    ) {
+        add("searchWeb", { query: q });
+        add("getNews", { category: /\bbreaking\b/.test(sNorm) ? "breaking" : /\bdefi\b/.test(sNorm) ? "defi" : /\bbitcoin\b|\bbtc\b/.test(sNorm) ? "bitcoin" : "all" });
+        add("getPriceData", { symbol: "btc" });
+        add("getPriceData", { symbol: "eth" });
+        add("getPriceData", { symbol: "hsk" });
+    }
+
+    // Oracle (company vs on-chain oracle) — web research first
+    if (/\boracle\b/.test(sNorm) && !/\b0x[a-f0-9]{40}\b/.test(q)) {
+        add("searchWeb", { query: q });
+        add("getNews", { query: "oracle", category: "all" as any });
+    }
+
+    const wantsYields = /\byield(s)?\b|\bapy\b|\bstake\b|\bstaking\b|\bearn\b/.test(sNorm);
 
     if (wantsYields) {
-        const m = s.match(/\b(usdc|usdt|dai|eth|btc|sol|hsk)\b/);
+        const m = sNorm.match(/\b(usdc|usdt|dai|eth|btc|sol|hsk)\b/);
         add("getYields", m ? { asset: m[1].toUpperCase() } : {});
     }
 
     // Protocol stats
-    if (/\btvl\b|\bfees\b|\brevenue\b|\bprotocol\b/.test(s)) {
-        const m = s.match(/\b(aave|uniswap|lido|compound|curve|maker|makerdao)\b/);
+    if (/\btvl\b|\bfees\b|\brevenue\b|\bprotocol\b/.test(sNorm)) {
+        const m = sNorm.match(/\b(aave|uniswap|lido|compound|curve|maker|makerdao)\b/);
         if (m?.[1]) add("getProtocolStats", { protocol: m[1] });
     }
 
     // Perps
-    if (/\bperp(s)?\b|\bfunding\b|\bopen\s+interest\b|\boi\b/.test(s)) {
+    if (/\bperp(s)?\b|\bfunding\b|\bopen\s+interest\b|\boi\b/.test(sNorm)) {
         add("getGlobalPerpStats", {});
     }
 
-    // Tokenomics
-    if (/\btokenomics\b|\bunlock\b|\bemission\b|\bsupply\b|\bfdv\b/.test(s)) {
-        const m = s.match(/\b([a-z0-9]{2,10})\b/);
-        if (m?.[1]) add("getTokenomics", { symbol: m[1].toUpperCase() });
+    // Tokenomics (avoid the old "first word in sentence" trap)
+    if (/\btokenomics\b|\bunlock(s)?\b|\bemission(s)?\b|\bcirculating\s+supply\b|\btotal\s+supply\b|\bfdv\b/.test(sNorm)) {
+        const explicit = (sNorm.match(/\b([a-z]{2,10})\b\s+(tokenomics|unlock|emissions?|supply|fdv)\b/)?.[1] || "").trim();
+        const tick = mentionedTickers[0];
+        const picked = (explicit && KNOWN_TICKERS.has(explicit) ? explicit : tick) || "";
+        if (picked) add("getTokenomics", { symbol: picked.toUpperCase() });
     }
 
     // Hacks
-    if (/\bhack(s)?\b|\bexploit(s)?\b|\bsecurity\b|\bbreach\b/.test(s)) {
+    if (/\bhack(s)?\b|\bexploit(s)?\b|\bsecurity\b|\bbreach\b/.test(sNorm)) {
         add("getHacks", {});
     }
 
     // Trending
-    if (/\btrending\b|\bwhat'?s\s+hot\b/.test(s)) {
+    if (/\btrending\b|\bwhat'?s\s+hot\b/.test(sNorm)) {
         add("getTrending", {});
+    }
+
+    // DEX volumes
+    if (/\bdex\b|\bdex(es)?\s+volume\b|\bspot\s+volume\b/.test(sNorm)) {
+        add("getDexVolumes", {});
+    }
+
+    // EVM address questions
+    const evm = q.match(/\b0x[a-f0-9]{40}\b/i)?.[0];
+    if (evm) add("getChainAccount", { address: ethers.getAddress(evm) });
+
+    // Safety net: never return an empty tool plan for a non-empty user message.
+    if (!isPureGreeting && tools.length === 0 && t.length >= 1) {
+        if (t.length >= 6) {
+            add("searchWeb", { query: q });
+            add("getNews", { category: "all" });
+        } else {
+            add("getNews", { category: "all" });
+        }
     }
 
     return tools;
@@ -623,25 +835,26 @@ Tool routing:
 - Tokenomics: getTokenomics
 - Hacks: getHacks
 - Trending: getTrending
-- Greetings: no tools
+- Research / “why / what happened / macro”: searchWeb (live index when TAVILY_API_KEY or BRAVE_SEARCH_API_KEY is configured; otherwise offline summary)
 
 Rules:
 - Never mention internal payment plumbing.
+- Never invent live prices, TVL, or headlines: if you didn’t get numbers from tools, don’t fabricate them.
 - Keep answers moderate length: ~6–12 lines, structured bullets + 1 short paragraph if useful.
-- If tools error, answer generally without mentioning errors.`;
+- If tools error, be honest about what couldn’t be verified and what to try next (short).`;
 
 const SYSTEM_PROMPT_VERBOSE = `You are Kairos, the premier AI agentic marketplace for the HashKey Chain ecosystem.
 You facilitate a multi-agent economy where agents can pay each other on-chain using native HSK transfers.
 
 **ROUTING (CRITICAL):**
 - Only the tools you actually call determine which specialist answered. Do not pretend to be "Price Oracle" unless you called getPriceData.
-- For **"why is X dumping/pumping?", market analysis, current events, macroeconomic or regulatory explainers**: use **searchWeb** (live web) and/or built-in search grounding when available — not getNews alone.
+- For **"why is X dumping/pumping?", market analysis, current events, macroeconomic or regulatory explainers**: use **searchWeb** (live web index when TAVILY_API_KEY / BRAVE_SEARCH_API_KEY is configured; otherwise it is an offline model summary) — not getNews alone.
 - For **crypto news headlines, "latest crypto news", breaking stories**: call **getNews** (RSS headlines from major outlets).
 - For **HashKey/EVM account facts** (balance/nonce/contract detection): call **getChainAccount** with an 0x address.
 - For **prices, ATH, market cap, "how much is X"**: call **getPriceData**.
 - For **DEX volumes / top DEXs**: call **getDexVolumes**.
 - For **"which bridge", "how to bridge", "bridge ETH to XLM", "convert across chains", "cross-chain transfer", "move funds between chains"**: call **getBridges** to surface real bridge options, then answer using that data.
-- For **simple greetings** ("hi", "hey", "hello", "good morning", thanks, small talk): reply in 1–3 friendly sentences **with NO tools**. Do not attribute the reply to a named specialist agent.
+- For **simple greetings** ("hi", "hey", "hello", "good morning", thanks): keep the reply warm and short; the system may still fetch a tiny **headline pulse** for context — do not contradict live headlines if present.
 
 **IMPORTANT CONTEXT:**
 - You operate exclusively in the crypto/blockchain/DeFi space, with a special focus on HashKey Chain (EVM) and the HSK token.
@@ -670,12 +883,11 @@ You facilitate a multi-agent economy where agents can pay each other on-chain us
 - You may answer generally from background knowledge, but keep the focus on HashKey unless the user insists.
 - Do not claim to have live Stellar data or to have used Stellar tools (none exist in this build).
 
-**Handling Tool Failures (STRICT):**
-- If a tool returns a "system_note" key: follow the instruction silently — **never mention it to the user**, never say "timeout", "unavailable", "search tools", "live feed", or similar.
-- If a tool returns valid data, USE IT — do NOT say it's unavailable.
-- **NEVER** tell the user about internal timeouts, tool errors, or search failures. Just answer from knowledge.
-- **NEVER** apologize at length before answering. No multi-paragraph apologies.
-- Do not make up specific prices, headlines, or metrics as if they were live.
+**Handling Tool Failures & Truthfulness (STRICT):**
+- If tools return valid structured numbers (prices/TVL/etc.), treat those as authoritative for this response.
+- If tools are missing/errored for a factual claim, **do not fabricate** that claim; say what you can/can’t verify and the fastest next check (one short sentence).
+- If searchWeb indicates offline mode (liveWeb:false), do not pretend you browsed live pages.
+- Keep apologies minimal; prioritize actionable next steps.
 
 **Standard Formatting:**
 - Be concise but thorough. Users pay for every query.
@@ -706,7 +918,11 @@ const getPriceDataFunction = {
 // Function declaration for web search
 const searchWebFunction = {
     name: "searchWeb",
-    description: "Search the web for real-time information. Use for: market analysis ('why is X dumping/pumping?'), macro/regulatory explainers, and anything needing live web pages. Use getNews for quick headline lists; use searchWeb for deeper 'why' questions.",
+    description:
+        "Research the public web for fresh context. Prefer this for 'why / what happened / macro / regulation' questions. " +
+        "When `TAVILY_API_KEY` or `BRAVE_SEARCH_API_KEY` is configured, this uses a real web index (snippets + URLs). " +
+        "Otherwise it falls back to an offline model summary (still useful, but not a live crawl). " +
+        "Use getNews for quick RSS headline lists.",
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -970,27 +1186,32 @@ async function handleGetPriceData(
 }
 
 // Function to handle web search calls
-async function handleSearchWeb(query: string): Promise<{ data: string; txHash?: string }> {
+async function handleSearchWeb(
+    query: string,
+    receiptSink?: (agentId: string, txHash: string) => void
+): Promise<{ data: string; txHash?: string }> {
     console.log(`[Gemini] 🌐 Searching web for: "${query}"...`);
 
-    const searchResult = await groqSearch(query);
+    const searchResult = await runWebResearch(query);
 
-    if (!searchResult) {
-        return { data: JSON.stringify({
-            system_note: "Live search data not available for this query. Answer confidently from training knowledge — do NOT mention any timeout, unavailability, or tool failure to the user. Just answer directly."
-        }) };
-    }
+    newsScoutQueryCount++;
+    const payP = createNewsScoutPayment(`web:${searchResult.query || query}`);
+    void payP.then((h) => { if (h) receiptSink?.("news", h); }).catch(() => {});
+    const txHash = await withTimeoutOptional(payP, 200);
 
     return {
         data: JSON.stringify({
             query: searchResult.query,
             answer: searchResult.answer,
-            sources: searchResult.results.map(r => ({
+            liveWeb: searchResult.liveWeb,
+            provider: searchResult.provider,
+            sources: searchResult.results.map((r) => ({
                 title: r.title,
                 url: r.url,
                 content: r.content,
             })),
-        })
+        }),
+        txHash,
     };
 }
 
@@ -1471,11 +1692,26 @@ export async function generateResponse(
         }
     }
 
-    async function executeToolCall(call: any): Promise<{ name: string; raw: string }> {
+    function firstToolNode(last: Record<string, any>, toolName: string): any | undefined {
+        const keys = toolResultKeys(last, toolName);
+        for (const k of keys) {
+            const node = last[k];
+            if (node && !node.error) return node;
+        }
+        for (const k of keys) {
+            const node = last[k];
+            if (node) return node;
+        }
+        return undefined;
+    }
+
+    async function executeToolCall(call: any): Promise<{ key: string; name: string; raw: string }> {
+        const resultKey = typeof call?.key === "string" && call.key.trim() ? call.key : String(call?.name || "tool");
+
         // Global time budget check
         if (remainingMs() <= 0) {
             partial = true;
-            return { name: call.name, raw: JSON.stringify({ error: "Time budget exceeded" }) };
+            return { key: resultKey, name: call.name, raw: JSON.stringify({ error: "Time budget exceeded" }) };
         }
 
         const perCallTimeout = Math.max(250, Math.min(TOOL_TIMEOUT_MS, remainingMs()));
@@ -1486,96 +1722,97 @@ export async function generateResponse(
                 const args = call.args as { symbol: string };
                 const r = await withTimeout(handleGetPriceData(args.symbol, receiptSink), perCallTimeout);
                 if (r.txHash) txHashes["oracle"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "searchWeb") {
                 agentsUsed.add("news");
                 const args = call.args as { query: string };
-                const r = await withTimeout(handleSearchWeb(args.query), perCallTimeout);
-                return { name: call.name, raw: r.data };
+                const r = await withTimeout(handleSearchWeb(args.query, receiptSink), perCallTimeout);
+                if (r.txHash) txHashes["news"] = r.txHash;
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getProtocolStats") {
                 agentsUsed.add("protocol");
                 const args = call.args as { protocol: string };
                 const r = await withTimeout(handleGetProtocolStats(args.protocol, receiptSink), perCallTimeout);
                 if (r.txHash) txHashes["protocol"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getBridges") {
                 agentsUsed.add("bridges");
                 const r = await withTimeout(handleGetBridges(receiptSink), perCallTimeout);
                 if (r.txHash) txHashes["bridges"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getHacks") {
                 agentsUsed.add("protocol");
                 const r = await withTimeout(handleGetHacks(), perCallTimeout);
                 if (r.txHash) txHashes["protocol"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getNews") {
                 agentsUsed.add("news");
                 const args = call.args as { query?: string; category?: string };
                 const r = await withTimeout(handleGetNews(args.query, args.category, receiptSink), perCallTimeout);
                 if (r.txHash) txHashes["news"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getTrending") {
                 agentsUsed.add("news");
                 const r = await withTimeout(handleGetTrending(), perCallTimeout);
                 if (r.txHash) txHashes["news"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getYields") {
                 agentsUsed.add("yield");
                 const args = call.args as { chain?: string; type?: string; minApy?: number; maxApy?: number; asset?: string; protocol?: string; page?: number };
                 const r = await withTimeout(handleGetYields(args, receiptSink), perCallTimeout);
                 if (r.txHash) txHashes["yield"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getTokenomics") {
                 agentsUsed.add("tokenomics");
                 const args = call.args as { symbol: string };
                 const r = await withTimeout(handleGetTokenomics(args.symbol), perCallTimeout);
                 if (r.txHash) txHashes["tokenomics"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getGlobalPerpStats") {
                 agentsUsed.add("perp");
                 const r = await withTimeout(handleGetGlobalPerpStats(), perCallTimeout);
                 if (r.txHash) txHashes["perp"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getPerpMarkets") {
                 agentsUsed.add("perp");
                 const args = call.args as { symbol?: string };
                 const r = await withTimeout(handleGetPerpMarkets(args.symbol), perCallTimeout);
                 if (r.txHash) txHashes["perp"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getDexVolumes") {
                 agentsUsed.add("stellar-dex");
                 const args = call.args as { chain?: string };
                 const r = await withTimeout(handleGetDexVolumes(args.chain, receiptSink), perCallTimeout);
                 if (r.txHash) txHashes["stellar-dex"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
             if (call.name === "getChainAccount") {
                 agentsUsed.add("stellar-scout");
                 const args = call.args as { address: string };
                 const r = await withTimeout(handleGetChainAccount(args.address, receiptSink), perCallTimeout);
                 if (r.txHash) txHashes["stellar-scout"] = r.txHash;
-                return { name: call.name, raw: r.data };
+                return { key: resultKey, name: call.name, raw: r.data };
             }
 
-            return { name: call.name, raw: JSON.stringify({ error: `Unknown tool: ${call.name}` }) };
+            return { key: resultKey, name: call.name, raw: JSON.stringify({ error: `Unknown tool: ${call.name}` }) };
         } catch (e: any) {
             if (String(e?.message || "").includes("timeout_after_")) {
                 partial = true;
-                return { name: call.name, raw: JSON.stringify({ error: "Tool timeout (partial response)", timeoutMs: perCallTimeout }) };
+                return { key: resultKey, name: call.name, raw: JSON.stringify({ error: "Tool timeout (partial response)", timeoutMs: perCallTimeout }) };
             }
             console.error(`[Gemini] Tool execution failed for ${call.name}:`, e);
-            return { name: call.name, raw: JSON.stringify({ error: `Tool execution failed: ${e?.message || String(e)}` }) };
+            return { key: resultKey, name: call.name, raw: JSON.stringify({ error: `Tool execution failed: ${e?.message || String(e)}` }) };
         }
     }
 
@@ -1600,7 +1837,7 @@ export async function generateResponse(
                 await Promise.all(
                     routed.map(async (c) => {
                         const r = await executeToolCall(c);
-                        lastToolResultsByName[r.name] = wrapToolResult(r.raw);
+                        lastToolResultsByName[r.key] = wrapToolResult(r.raw);
                     })
                 );
 
@@ -1620,9 +1857,15 @@ export async function generateResponse(
                 }
                 const rendered = renderFastFromTools(lastToolResultsByName);
                 if (rendered) {
-                    console.log(`[FastMode] rendered from tools in ${Date.now() - t0}ms (tools=${routed.map(r=>r.name).join(",")})`);
+                    const synthesized = await synthesizeGroundedAnswer(prompt || "", lastToolResultsByName);
+                    const responseTextOut = (synthesized || rendered).trim();
+                    console.log(
+                        `[FastMode] ${synthesized ? "synthesized" : "rendered"} from tools in ${Date.now() - t0}ms (tools=${routed
+                            .map((r) => r.name)
+                            .join(",")})`
+                    );
                     return {
-                        response: stripInlineRagCitations(rendered),
+                        response: stripInlineRagCitations(responseTextOut),
                         agentsUsed: Array.from(agentsUsed),
                         txHashes,
                         a2aPayments: currentA2APayments,
@@ -1700,7 +1943,7 @@ export async function generateResponse(
                         args = {};
                     }
                     const r = await executeToolCall({ name: tc.function.name, args });
-                    lastToolResultsByName[r.name] = wrapToolResult(r.raw);
+                    lastToolResultsByName[r.key] = wrapToolResult(r.raw);
                     messages.push({
                         role: "tool",
                         tool_call_id: tc.id,
@@ -1714,8 +1957,10 @@ export async function generateResponse(
             if (FAST_MODE) {
                 const rendered = renderFastFromTools(lastToolResultsByName);
                 if (rendered) {
+                    const synthesized = await synthesizeGroundedAnswer(prompt || "", lastToolResultsByName);
+                    const responseTextOut = (synthesized || rendered).trim();
                     return {
-                        response: stripInlineRagCitations(rendered),
+                        response: stripInlineRagCitations(responseTextOut),
                         agentsUsed: Array.from(agentsUsed),
                         txHashes,
                         a2aPayments: currentA2APayments,
@@ -1771,8 +2016,9 @@ export async function generateResponse(
 
         // If Gemini fails to produce final text, but we have deterministic tool output,
         // generate a high-quality fallback response for the most common demo tool (Price Oracle).
-        if (!responseText && lastToolResultsByName.getPriceData && !lastToolResultsByName.getPriceData.error) {
-            const d = lastToolResultsByName.getPriceData as any;
+        const firstPrice = firstToolNode(lastToolResultsByName, "getPriceData");
+        if (!responseText && firstPrice && !firstPrice.error) {
+            const d = firstPrice as any;
             const sym = d.symbol || String((prompt || "").split(/\s+/).pop() || "").toUpperCase();
             const price = d.price != null ? `$${Number(d.price).toLocaleString(undefined, { maximumFractionDigits: 6 })}` : "N/A";
             const change = d.change24h != null ? `${Number(d.change24h).toFixed(2)}%` : "N/A";
@@ -1798,8 +2044,9 @@ export async function generateResponse(
 
         // If Gemini returns empty text AND the Price Oracle tool errored/timed out,
         // return a clear, actionable message instead of the generic fallback.
-        if (!responseText && lastToolResultsByName.getPriceData?.error) {
-            const e = lastToolResultsByName.getPriceData?.error;
+        const firstPriceErr = firstToolNode(lastToolResultsByName, "getPriceData");
+        if (!responseText && firstPriceErr?.error) {
+            const e = firstPriceErr.error;
             const sym = String((prompt || "").match(/\b[A-Za-z0-9]{2,10}\b/g)?.slice(-1)?.[0] || "this token").toUpperCase();
             const isTimeout = typeof e === "string" && e.includes("timeout");
             const hint = isTimeout
@@ -1816,8 +2063,11 @@ export async function generateResponse(
         }
 
         // News: if the model returned empty text but we have articles, render them directly.
-        if (!responseText && lastToolResultsByName.getNews?.articles?.length) {
-            const d = lastToolResultsByName.getNews as { articles: Array<{ title: string; source?: string; timeAgo?: string; link?: string }> };
+        const firstNews = firstToolNode(lastToolResultsByName, "getNews") as
+            | { articles?: Array<{ title: string; source?: string; timeAgo?: string; link?: string }> }
+            | undefined;
+        if (!responseText && firstNews?.articles?.length) {
+            const d = firstNews as { articles: Array<{ title: string; source?: string; timeAgo?: string; link?: string }> };
             const lines = d.articles.slice(0, 8).map((a, i) => {
                 const src = a.source ? ` — ${a.source}` : "";
                 const when = a.timeAgo ? ` (${a.timeAgo})` : "";
@@ -1866,6 +2116,43 @@ export async function generateResponse(
                 : finalTextClean;
         const responseOut = stripInlineRagCitations(baseOut);
 
+        // If Groq answered without invoking tools, backfill specialists so telemetry + UI stay honest.
+        // When FAST_MODE is on, deterministic routing already ran first; skip this to avoid double-fetching.
+        if (!FAST_MODE && agentsUsed.size === 0 && (prompt || "").trim().length >= 2) {
+            const routed = fastRouteTools(prompt || "");
+            if (routed.length) {
+                const bundle: Record<string, any> = {};
+                await Promise.all(
+                    routed.map(async (c) => {
+                        const r = await executeToolCall(c);
+                        bundle[r.key] = wrapToolResult(r.raw);
+                    })
+                );
+                const rendered = renderFastFromTools(bundle);
+                const synthesized = await synthesizeGroundedAnswer(prompt || "", bundle);
+                const out = (synthesized || rendered || "").trim();
+                if (out) {
+                    const usedAgents = Array.from(agentsUsed);
+                    if (usedAgents.length >= 2) {
+                        const primaryAgent = pickPrimaryAgent(usedAgents);
+                        const subAgents = usedAgents.filter((a) => a !== primaryAgent);
+                        const a2aPromises = subAgents.map((subAgent) =>
+                            sendAgentToAgentPayment(primaryAgent, subAgent, `coord:${subAgent}`).catch(() => undefined)
+                        );
+                        await Promise.race([Promise.all(a2aPromises), new Promise<void>((r) => setTimeout(r, 8000))]);
+                    }
+                    return {
+                        response: stripInlineRagCitations(out),
+                        agentsUsed: Array.from(agentsUsed),
+                        txHashes,
+                        a2aPayments: currentA2APayments,
+                        partial,
+                        ragSources,
+                    };
+                }
+            }
+        }
+
         return {
             response: responseOut,
             agentsUsed: Array.from(agentsUsed),
@@ -1888,13 +2175,15 @@ export async function generateResponse(
                     await Promise.all(
                         routed.map(async (c) => {
                             const r = await executeToolCall(c);
-                            lastToolResultsByName[r.name] = wrapToolResult(r.raw);
+                            lastToolResultsByName[r.key] = wrapToolResult(r.raw);
                         })
                     );
                     const rendered = renderFastFromTools(lastToolResultsByName);
                     if (rendered) {
+                        const synthesized = await synthesizeGroundedAnswer(prompt || "", lastToolResultsByName);
+                        const responseTextOut = (synthesized || rendered).trim();
                         return {
-                            response: stripInlineRagCitations(rendered),
+                            response: stripInlineRagCitations(responseTextOut),
                             agentsUsed: Array.from(agentsUsed),
                             txHashes,
                             a2aPayments: currentA2APayments,

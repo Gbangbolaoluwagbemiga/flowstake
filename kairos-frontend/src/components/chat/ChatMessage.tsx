@@ -51,6 +51,20 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
   const [isRating, setIsRating] = useState(false);
   const [showPulse, setShowPulse] = useState(false);
   const [showRag, setShowRag] = useState(false);
+  /** After this, stop implying a tx is still landing — show explicit "no receipt" for missing hashes. */
+  const [receiptTimedOut, setReceiptTimedOut] = useState(false);
+
+  useEffect(() => {
+    if (isUser) return;
+    const ids = agentsUsed || [];
+    const missing = ids.filter((id) => !(txHashes?.[id]));
+    if (missing.length === 0) {
+      setReceiptTimedOut(false);
+      return;
+    }
+    const t = window.setTimeout(() => setReceiptTimedOut(true), 50_000);
+    return () => window.clearTimeout(t);
+  }, [isUser, agentsUsed, txHashes]);
 
   useEffect(() => {
     if (!isUser && agentsUsed && agentsUsed.length > 0) {
@@ -144,49 +158,74 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
             {agentsUsed.map((agentId) => {
               const meta = AGENT_COLORS[agentId] ?? { bg: '#ffffff10', dot: '#888', label: agentId };
               const txHash = txHashes?.[agentId];
-              
-              if (txHash) {
-                return (
-                  <div key={agentId} className="flex items-center gap-1">
-                    <a 
-                      href={txUrl(txHash)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="agent-badge hover:brightness-125 transition-all group cursor-pointer flex items-center gap-1.5 py-1 px-2.5" 
-                      style={{ 
-                        background: `linear-gradient(to right, ${meta.bg}, ${meta.dot}10)`, 
-                        borderColor: `${meta.dot}40`, 
-                        color: meta.dot,
-                        boxShadow: `0 0 10px ${meta.dot}15`
-                      }}
-                      title="View on HashKey Explorer"
-                    >
-                      <span className="relative flex h-1.5 w-1.5">
-                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75"></span>
-                        <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-sky-500"></span>
-                      </span>
-                      <span className="font-semibold text-[10px] tracking-wide uppercase">{meta.label}</span>
-                      <span className="text-[9px] bg-sky-500/20 px-1 rounded text-sky-400 border border-sky-500/30">HSK</span>
-                      <ExternalLink className="w-2.5 h-2.5 ml-0.5 opacity-40 group-hover:opacity-100 transition-opacity" />
-                    </a>
-                    
-                    {/* Registry Badge */}
-                    <div 
-                      className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-violet-500/10 border border-violet-500/20 text-[8px] text-violet-300 font-medium uppercase tracking-tighter"
-                      title="On-chain Agent Registry Verified (EVM)"
-                    >
-                      <Check className="w-2 h-2 text-violet-400" />
-                      Registry
-                    </div>
-                  </div>
-                );
-              }
+              const cardStyle = {
+                background: `linear-gradient(to right, ${meta.bg}, ${meta.dot}10)`,
+                borderColor: `${meta.dot}40`,
+                color: meta.dot,
+                boxShadow: `0 0 10px ${meta.dot}15`,
+              } as const;
+
+              const pulse = (
+                <span className="relative flex h-1.5 w-1.5">
+                  <span
+                    className={txHash ? 'animate-ping absolute inline-flex h-full w-full rounded-full bg-sky-400 opacity-75' : 'animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400/80 opacity-75'}
+                  />
+                  <span
+                    className={`relative inline-flex rounded-full h-1.5 w-1.5 ${txHash ? 'bg-sky-500' : 'bg-amber-500'}`}
+                  />
+                </span>
+              );
+
+              const labelRow = (
+                <>
+                  {pulse}
+                  <span className="font-semibold text-[10px] tracking-wide uppercase">{meta.label}</span>
+                  <span className="text-[9px] bg-sky-500/20 px-1 rounded text-sky-400 border border-sky-500/30">HSK</span>
+                </>
+              );
+
+              const badge = txHash ? (
+                <a
+                  href={txUrl(txHash)}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="agent-badge hover:brightness-125 transition-all group cursor-pointer flex items-center gap-1.5 py-1 px-2.5"
+                  style={cardStyle}
+                  title="View treasury payment on HashKey Explorer"
+                >
+                  {labelRow}
+                  <ExternalLink className="w-2.5 h-2.5 ml-0.5 opacity-40 group-hover:opacity-100 transition-opacity" />
+                </a>
+              ) : (
+                <span
+                  className="agent-badge flex items-center gap-1.5 py-1 px-2.5 cursor-default border border-dashed"
+                  style={{ ...cardStyle, opacity: 0.95 }}
+                  title={
+                    receiptTimedOut
+                      ? 'No tx hash after ~50s — treasury payment likely failed (e.g. spending policy) or receipts never arrived. Check backend logs; with KAIROS_SPENDING_POLICY_STRICT=0, canSpend reverts are bypassed for demo payouts.'
+                      : 'Waiting for tx hash from the API / receipts poll…'
+                  }
+                >
+                  {labelRow}
+                  <span
+                    className={`text-[8px] font-medium uppercase tracking-wide ml-0.5 ${receiptTimedOut ? 'text-rose-400/90' : 'text-amber-400/90'}`}
+                  >
+                    {receiptTimedOut ? 'No receipt' : 'Confirming…'}
+                  </span>
+                </span>
+              );
 
               return (
-                <span key={agentId} className="agent-badge" style={{ background: meta.bg, borderColor: `${meta.dot}30`, color: meta.dot }}>
-                  <span style={{ width: 5, height: 5, borderRadius: '50%', background: meta.dot, display: 'inline-block' }} />
-                  {meta.label}
-                </span>
+                <div key={agentId} className="flex items-center gap-1">
+                  {badge}
+                  <div
+                    className="flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-violet-500/10 border border-violet-500/20 text-[8px] text-violet-300 font-medium uppercase tracking-tighter"
+                    title={txHash ? 'On-chain tx hash captured for this agent' : 'Agent invoked; registry / receipt pending'}
+                  >
+                    <Check className="w-2 h-2 text-violet-400" />
+                    Registry
+                  </div>
+                </div>
               );
             })}
           </div>

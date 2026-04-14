@@ -49,13 +49,39 @@ export async function sendTreasuryPayment(args: {
     const provider = hashkeyProvider(args.cfg);
     const wallet = new ethers.Wallet(args.cfg.treasuryPrivateKey, provider);
 
+    /** When `1`, any canSpend revert or `false` blocks the payout. Default `0`: revert → pay anyway (demo / ABI mismatch). */
+    const policyStrict = (process.env.KAIROS_SPENDING_POLICY_STRICT || "0").trim() === "1";
+
     // Optional: enforce spending policy (trusted backend records spends)
+    let skipPolicy = false;
     if (args.spendingPolicy?.spendingPolicyAddress) {
         const policy = new ethers.Contract(args.spendingPolicy.spendingPolicyAddress, SPENDING_POLICY_ABI, wallet);
         const key = ethers.keccak256(ethers.toUtf8Bytes(args.agentKey));
-        const ok: boolean = await policy.canSpend(key, args.amountWei);
-        if (!ok) {
-            const rem: bigint = await policy.remaining(key);
+        let ok = false;
+        try {
+            ok = await policy.canSpend(key, args.amountWei);
+        } catch (e: any) {
+            const msg = String(e?.message || e || "");
+            if (policyStrict) {
+                throw new Error(
+                    `Spending policy canSpend() reverted for agent "${args.agentKey}" at ${args.spendingPolicy.spendingPolicyAddress}. ` +
+                        `Set KAIROS_SPENDING_POLICY_STRICT=0 to allow treasury payout without this check, or fix the policy ABI / deployment. ` +
+                        `Underlying: ${msg}`
+                );
+            }
+            skipPolicy = true;
+            console.warn(
+                `[HashKey] canSpend reverted for ${args.agentKey} (${args.label}) — paying WITHOUT policy gate (KAIROS_SPENDING_POLICY_STRICT=0). ` +
+                    `Set KAIROS_SPENDING_POLICY_STRICT=1 to hard-fail. ${msg.slice(0, 200)}`
+            );
+        }
+        if (!skipPolicy && !ok) {
+            let rem = 0n;
+            try {
+                rem = await policy.remaining(key);
+            } catch {
+                // ignore — remaining() may not exist on all policy deployments
+            }
             throw new Error(
                 `Spending policy blocked ${args.agentKey}: remaining=${ethers.formatEther(rem)} HSK, requested=${ethers.formatEther(args.amountWei)} HSK`
             );
@@ -69,7 +95,7 @@ export async function sendTreasuryPayment(args: {
     });
 
     // Record spend after broadcast (best-effort; do not fail the payment if this fails)
-    if (args.spendingPolicy?.spendingPolicyAddress) {
+    if (args.spendingPolicy?.spendingPolicyAddress && !skipPolicy) {
         try {
             const policy = new ethers.Contract(args.spendingPolicy.spendingPolicyAddress, SPENDING_POLICY_ABI, wallet);
             const key = ethers.keccak256(ethers.toUtf8Bytes(args.agentKey));

@@ -70,6 +70,25 @@ export async function resolveAgentEvm(args: {
     try {
         const key = toKeyBytes32(agentKey);
         const a = await registry.getAgent(key);
+        const policyAddr = (process.env.KAIROS_SPENDING_POLICY_EVM_ADDRESS || "").trim().toLowerCase();
+        const regOwner = String(a.owner || "").toLowerCase();
+        // Misconfigured registries sometimes point agent.owner at the spending-policy contract.
+        // Native HSK payouts must go to an EOA/agent wallet, not the policy contract.
+        if (policyAddr && regOwner && regOwner === policyAddr && ownerFallback) {
+            console.warn(
+                `[RegistryEVM] ${agentKey}: on-chain owner matches KAIROS_SPENDING_POLICY_EVM_ADDRESS; using ${agentKey.toUpperCase()}_EVM_ADDRESS fallback`
+            );
+            return {
+                key: agentKey,
+                owner: mustAddr(ownerFallback, `${agentKey.toUpperCase()}_EVM_ADDRESS`),
+                name: agentKey,
+                serviceType: agentKey,
+                priceWei: BigInt(a.priceWei),
+                reputation: Number(a.reputation),
+                tasksCompleted: Number(a.tasksCompleted),
+                active: Boolean(a.active),
+            };
+        }
         return {
             key: agentKey,
             owner: String(a.owner),
