@@ -620,6 +620,16 @@ app.post("/query", queryLimiter, async (req, res) => {
         }
 
         const agentsUsed = Array.from(result.agentsUsed);
+        const paymentsEnabled =
+            !String(process.env.KAIROS_PAYMENTS || "hashkey").trim().toLowerCase().startsWith("off") &&
+            (() => {
+                try {
+                    const cfg = loadActiveEvmChainFromEnv();
+                    return !!cfg.rpcUrl;
+                } catch {
+                    return false;
+                }
+            })();
 
         res.json({
             success: true,
@@ -627,6 +637,7 @@ app.post("/query", queryLimiter, async (req, res) => {
             agentsUsed,
             txHashes: result.txHashes,
             a2aPayments: result.a2aPayments || [],
+            paymentsEnabled,
             requestId: rid,
             partial: !!result.partial,
             cost: "0.03",

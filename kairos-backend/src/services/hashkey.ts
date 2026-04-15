@@ -34,6 +34,24 @@ export function hashkeyProvider(cfg: HashkeyChainConfig): ethers.JsonRpcProvider
     return new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId);
 }
 
+// Treasury nonce management: we want to return tx hashes immediately (pending),
+// without waiting for mining, while still preventing nonce collisions.
+let treasuryNonceKey: string | null = null;
+let treasuryNextNonce: number | null = null;
+
+async function nextTreasuryNonce(provider: ethers.JsonRpcProvider, from: string, key: string): Promise<number> {
+    if (treasuryNonceKey !== key) {
+        treasuryNonceKey = key;
+        treasuryNextNonce = null;
+    }
+    if (treasuryNextNonce === null) {
+        treasuryNextNonce = await provider.getTransactionCount(from, "pending");
+    }
+    const n = treasuryNextNonce;
+    treasuryNextNonce += 1;
+    return n;
+}
+
 /**
  * Sends a native HSK transfer (treasury -> agent) and returns the tx hash.
  * Uses serialized callers upstream to avoid nonce races.
@@ -48,6 +66,8 @@ export async function sendTreasuryPayment(args: {
 }): Promise<string> {
     const provider = hashkeyProvider(args.cfg);
     const wallet = new ethers.Wallet(args.cfg.treasuryPrivateKey, provider);
+    const from = (await wallet.getAddress()).toLowerCase();
+    const nonceKey = `${args.cfg.rpcUrl}:${from}`;
 
     /** When `1`, any canSpend revert or `false` blocks the payout. Default `0`: revert → pay anyway (demo / ABI mismatch). */
     const policyStrict = (process.env.KAIROS_SPENDING_POLICY_STRICT || "0").trim() === "1";
@@ -92,15 +112,34 @@ export async function sendTreasuryPayment(args: {
     const waitTimeoutMs = Math.max(5000, Number(process.env.KAIROS_TX_WAIT_TIMEOUT_MS ?? "180000") || 180000);
 
     // Put label into tx metadata only via logs off-chain; native transfers can't carry memo.
-    const tx = await wallet.sendTransaction({
-        to: args.to,
-        value: args.amountWei,
-    });
+    let tx: ethers.TransactionResponse;
+    try {
+        const nonce = await nextTreasuryNonce(provider, from, nonceKey);
+        tx = await wallet.sendTransaction({
+            to: args.to,
+            value: args.amountWei,
+            nonce,
+        });
+    } catch (e: any) {
+        // If the RPC rejects due to nonce drift, reset and retry once.
+        const msg = String(e?.message || "");
+        if (msg.toLowerCase().includes("nonce") || msg.toLowerCase().includes("replacement")) {
+            treasuryNonceKey = null;
+            treasuryNextNonce = null;
+            const nonce = await nextTreasuryNonce(provider, from, nonceKey);
+            tx = await wallet.sendTransaction({
+                to: args.to,
+                value: args.amountWei,
+                nonce,
+            });
+        } else {
+            throw e;
+        }
+    }
 
-    // Wait until the payout is mined before releasing the treasury queue; otherwise the next
-    // payout can reuse a nonce that is still pending → "replacement fee too low" on HashKey RPC.
+    // Return the tx hash immediately (pending), and optionally await mining in background.
     if (waitConfirms > 0) {
-        await tx.wait(waitConfirms, waitTimeoutMs);
+        void tx.wait(waitConfirms, waitTimeoutMs).catch(() => {});
     }
 
     // Record spend after the transfer is settled (best-effort; do not fail the payment if this fails)
@@ -109,11 +148,7 @@ export async function sendTreasuryPayment(args: {
             const policy = new ethers.Contract(args.spendingPolicy.spendingPolicyAddress, SPENDING_POLICY_ABI, wallet);
             const key = ethers.keccak256(ethers.toUtf8Bytes(args.agentKey));
             const rec = await policy.recordSpend(key, args.amountWei);
-            if (waitConfirms > 0) {
-                await rec.wait(waitConfirms, waitTimeoutMs);
-            } else {
-                void rec.wait().catch(() => {});
-            }
+            void rec.wait(waitConfirms > 0 ? waitConfirms : 1, waitTimeoutMs).catch(() => {});
         } catch (e) {
             // non-fatal
             console.warn(`[HashKey] recordSpend failed for ${args.agentKey} (${args.label}):`, (e as Error)?.message);

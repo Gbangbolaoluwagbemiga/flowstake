@@ -605,7 +605,8 @@ function renderFastFromTools(last: Record<string, any>): string | null {
         const lines = rows.map((b: any, i: number) => {
             const num = b.number != null ? `#${b.number}` : `#?`;
             const txs = b.txCount != null ? `${b.txCount} txs` : "txs n/a";
-            const vol = b.nativeMovedHsk != null ? `${b.nativeMovedHsk} ${sym} (tx.value sum)` : "";
+            const moved = b.nativeMoved ?? b.nativeMovedHsk;
+            const vol = moved != null ? `${moved} ${sym} (tx.value sum)` : "";
             const gas = b.gasUsedRatio ? ` · block gas ${b.gasUsedRatio}` : "";
             return `${i + 1}. Block ${num} — ${txs}${vol ? ` · ${vol}` : ""}${gas}`;
         });
@@ -614,9 +615,10 @@ function renderFastFromTools(last: Record<string, any>): string | null {
                 ? `\n- Latest base fee (EIP-1559): **${Number(d.latestBaseFeeGwei).toLocaleString(undefined, { maximumFractionDigits: 4 })} gwei**`
                 : "";
         const host = d.rpcHost ? ` · RPC **${d.rpcHost}**` : "";
+        const windowMoved = d.windowNativeMoved ?? d.windowNativeMovedHsk ?? "?";
         sections.push(
-            `**X Layer chain pulse** (live JSON-RPC${host})\n` +
-                `- **chainId ${d.chainId ?? "?"}** · head **#${d.latestBlock}** · sampled **${d.windowBlocks ?? rows.length}** blocks · **${d.totalTxs ?? "?"}** txs in window · **${d.windowNativeMovedHsk ?? "?"}** native ${sym} in \`tx.value\`${baseFee}\n` +
+            `**${d.label ? String(d.label) : "X Layer"} chain pulse** (live JSON-RPC${host})\n` +
+                `- **chainId ${d.chainId ?? "?"}** · head **#${d.latestBlock}** · sampled **${d.windowBlocks ?? rows.length}** blocks · **${d.totalTxs ?? "?"}** txs in window · **${windowMoved}** native ${sym} in \`tx.value\`${baseFee}\n` +
                 (lines.length ? `\n**Blocks**\n${lines.join("\n")}` : "") +
                 (d.note ? `\n\n_${String(d.note)}_` : "")
         );
@@ -1046,7 +1048,7 @@ async function handleGetHashKeyPulse(
     receiptSink?: (agentId: string, txHash: string) => void
 ): Promise<{ data: string; txHash?: string }> {
     const depth = Math.min(20, Math.max(1, depthArg ?? 5));
-    console.log(`[Gemini] ⛓️ HashKey chain pulse (depth=${depth})...`);
+    console.log(`[Gemini] ⛓️ EVM chain pulse (depth=${depth})...`);
     const cfg = loadActiveEvmChainFromEnv();
     const payP = createChainScoutPayment(`pulse:${depth}`);
     void payP.then((h) => { if (h) receiptSink?.("chain-scout", h); }).catch(() => {});
@@ -1376,7 +1378,7 @@ const getChainAccountFunction = {
 const getHashKeyPulseFunction = {
     name: "getHashKeyPulse",
     description:
-        "HashKey-native **live chain pulse** via JSON-RPC (deployment `HASHKEY_RPC_URL`): **current head block height**, optional **EIP-1559 base fee** (native **gas price** signal), **per-block tx counts**, **block gas-used ratio**, and **native HSK** approximated as the sum of **tx.value** in each sampled block. Returns **chainId** (133 = HashKey testnet). Use for 'latest block', 'network health', 'gas on HashKey', 'how busy is the chain', or 'show last N blocks' — not for CoinGecko token prices.",
+        "Live **chain pulse** via the active JSON-RPC (X Layer when `KAIROS_CHAIN_TARGET=xlayer`): **head block height**, optional **EIP-1559 base fee**, **per-block tx counts**, **block gas-used ratio**, and **native token moved** approximated as Σ **tx.value** over recent blocks. Returns **chainId**, **nativeSymbol**, and **rpcHost**. Use for 'latest block', 'network health', 'gas/base fee', or 'show last N blocks'.",
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -1904,6 +1906,8 @@ export interface GenerateResponseResult {
     partial?: boolean;
     /** Populated when RAG retrieved corpus excerpts for this turn */
     ragSources?: RagSource[];
+    /** When false, UI should not show "confirming" payment badges */
+    paymentsEnabled?: boolean;
 }
 
 export async function generateResponse(
@@ -1916,6 +1920,60 @@ export async function generateResponse(
         // initGemini() is still called from index.ts for backwards compatibility.
         // If a deployment bypasses that, fail loudly with correct env hint.
         throw new Error("Groq not initialized. Set GROQ_API_KEY and restart.");
+    }
+
+    // Greeting / small-talk shortcut: don't route tools, don't pay agents, don't do web research.
+    const rawPrompt = String(prompt || "").trim();
+    const norm = rawPrompt.toLowerCase();
+    const isGreeting =
+        !imageData &&
+        rawPrompt.length > 0 &&
+        rawPrompt.length <= 24 &&
+        /^(hi|hey|hello|gm|gn|sup|yo|hola|good (morning|evening|afternoon))[\!\.\s]*$/.test(norm);
+
+    // "paymentsEnabled" should mean: settlement is configured (not OFF) and we have an RPC target.
+    // It should NOT flip to false just because treasury key parsing fails.
+    const chainTarget = String(process.env.KAIROS_CHAIN_TARGET || "hashkey").trim().toLowerCase();
+    const rpcUrlForTarget =
+        chainTarget === "xlayer"
+            ? String(process.env.XLAYER_RPC_URL || "").trim()
+            : String(process.env.HASHKEY_RPC_URL || "").trim();
+    const paymentsEnabled = !PAYMENTS_OFF && !!rpcUrlForTarget;
+
+    if (isGreeting) {
+        return {
+            response: "Hey — what do you want to do on X Layer?\n\n- Check a wallet balance\n- Run the demo economy loop\n- Ask about yields / protocols / perps",
+            agentsUsed: [],
+            txHashes: {},
+            a2aPayments: [],
+            partial: false,
+            ragSources: undefined,
+            paymentsEnabled,
+        };
+    }
+
+    // Brand guardrail: "Kairos" refers to THIS app by default.
+    // Only explain the Greek word if explicitly requested.
+    const asksKairosAbout = /\bwhat\s+is\s+kairos\b|\bwhat\s+does\s+kairos\s+do\b|\babout\s+kairos\b|\bkairos\s+app\b/i.test(rawPrompt);
+    const asksGreekMeaning =
+        /\bmeaning\b|\betymolog(y|ical)\b|\bdefinition\b|\bgreek\b|\bancient\b|\bword\b/i.test(norm) &&
+        /\bkairos\b/i.test(rawPrompt);
+    if (asksKairosAbout && !asksGreekMeaning) {
+        return {
+            response:
+                "Kairos is our **agentic marketplace on X Layer**.\n\n" +
+                "- **You chat once** → Kairos routes the request to specialist agents (news, yields, protocol stats, perps, etc.)\n" +
+                "- **Agents settle on-chain** using the chain’s native token (treasury → agent, plus optional agent→agent payments)\n" +
+                "- **On-chain identity**: AgentRegistry + SpendingPolicy contracts, verified on X Layer testnet\n" +
+                "- **Hackathon demo**: a one-click loop that generates explorer-verifiable transactions (earn → pay → earn)\n\n" +
+                "Tell me what you want to try: run the demo loop, check a wallet, or query an agent.",
+            agentsUsed: [],
+            txHashes: {},
+            a2aPayments: [],
+            partial: false,
+            ragSources: undefined,
+            paymentsEnabled,
+        };
     }
 
     let ragSources: RagSource[] | undefined;
@@ -2467,6 +2525,7 @@ export async function generateResponse(
                         a2aPayments: currentA2APayments,
                         partial,
                         ragSources,
+                        paymentsEnabled,
                     };
                 }
             }
@@ -2479,6 +2538,7 @@ export async function generateResponse(
             a2aPayments: currentA2APayments,
             partial: clientPartial,
             ragSources,
+            paymentsEnabled,
         };
     } catch (error: any) {
         console.error(`[Gemini] ⚠️ Error generating response:`, error?.message);
@@ -2509,6 +2569,7 @@ export async function generateResponse(
                             a2aPayments: currentA2APayments,
                             partial: false,
                             ragSources,
+                            paymentsEnabled,
                         };
                     }
                 }
@@ -2521,6 +2582,7 @@ export async function generateResponse(
                 agentsUsed: [],
                 txHashes: {},
                 ragSources,
+                paymentsEnabled,
             };
         }
         
@@ -2530,6 +2592,7 @@ export async function generateResponse(
                 agentsUsed: [],
                 txHashes: {},
                 ragSources,
+                paymentsEnabled,
             };
         }
 

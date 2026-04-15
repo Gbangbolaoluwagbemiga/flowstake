@@ -72,6 +72,7 @@ const Index = () => {
                   agentsUsed={message.agentsUsed}
                   txHashes={message.txHashes}
                   a2aPayments={message.a2aPayments}
+                  paymentsEnabled={message.paymentsEnabled}
                   partial={message.partial}
                   ragSources={message.ragSources}
                   onContinue={() => sendMessage('continue')}

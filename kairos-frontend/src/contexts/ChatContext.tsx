@@ -33,6 +33,7 @@ export interface Message {
     agentsUsed?: string[];
     partial?: boolean;
     ragSources?: RagSourceRef[];
+    paymentsEnabled?: boolean;
 }
 
 export interface ChatSession {

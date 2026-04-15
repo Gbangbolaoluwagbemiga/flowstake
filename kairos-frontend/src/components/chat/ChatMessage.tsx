@@ -40,12 +40,13 @@ interface ChatMessageProps {
   agentsUsed?: string[];
   txHashes?: Record<string, string>;
   a2aPayments?: A2APayment[];
+  paymentsEnabled?: boolean;
   partial?: boolean;
   ragSources?: RagSourceRef[];
   onContinue?: () => void;
 }
 
-export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agentsUsed, txHashes, a2aPayments, partial, ragSources, onContinue }: ChatMessageProps) {
+export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agentsUsed, txHashes, a2aPayments, paymentsEnabled, partial, ragSources, onContinue }: ChatMessageProps) {
   const { address } = useWallet();
   const [rating, setRating]   = useState<boolean | null>(null);
   const [isRating, setIsRating] = useState(false);
@@ -56,6 +57,10 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
 
   useEffect(() => {
     if (isUser) return;
+    if (paymentsEnabled === false) {
+      setReceiptTimedOut(false);
+      return;
+    }
     const ids = agentsUsed || [];
     const missing = ids.filter((id) => !(txHashes?.[id]));
     if (missing.length === 0) {
@@ -155,6 +160,15 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
 
         {!isUser && agentsUsed && agentsUsed.length > 0 && (
           <div className="flex flex-wrap gap-1.5 mb-1">
+            {paymentsEnabled === false && (
+              <span
+                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[9px] font-semibold uppercase tracking-widest"
+                style={{ background: '#ffffff06', borderColor: '#ffffff15', color: '#aaa' }}
+                title="On-chain settlement is disabled or not configured for this backend."
+              >
+                Settlement off
+              </span>
+            )}
             {agentsUsed.map((agentId) => {
               const meta = AGENT_COLORS[agentId] ?? { bg: '#ffffff10', dot: '#888', label: agentId };
               const txHash = txHashes?.[agentId];
@@ -196,6 +210,17 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
                   {labelRow}
                   <ExternalLink className="w-2.5 h-2.5 ml-0.5 opacity-40 group-hover:opacity-100 transition-opacity" />
                 </a>
+              ) : paymentsEnabled === false ? (
+                <span
+                  className="agent-badge flex items-center gap-1.5 py-1 px-2.5 cursor-default"
+                  style={{ ...cardStyle, opacity: 0.95 }}
+                  title="Agent ran, but on-chain settlement is disabled for this backend."
+                >
+                  {labelRow}
+                  <span className="text-[8px] font-medium uppercase tracking-wide ml-0.5 text-muted-foreground/70">
+                    No settlement
+                  </span>
+                </span>
               ) : (
                 <span
                   className="agent-badge flex items-center gap-1.5 py-1 px-2.5 cursor-default border border-dashed"

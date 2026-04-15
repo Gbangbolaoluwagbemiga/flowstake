@@ -5,7 +5,8 @@ export const HASHKEY_EXPLORER_BASE =
   import.meta.env.VITE_HASHKEY_EXPLORER_BASE || "https://testnet-explorer.hsk.xyz";
 
 // --- Active chain (hackathon-friendly) ---
-export const CHAIN_TARGET = (import.meta.env.VITE_CHAIN_TARGET || "hashkey") as "hashkey" | "xlayer";
+// Hackathon default: X Layer. (Set VITE_CHAIN_TARGET=hashkey only if you intentionally want legacy mode.)
+export const CHAIN_TARGET = (import.meta.env.VITE_CHAIN_TARGET || "xlayer") as "hashkey" | "xlayer";
 
 export const ACTIVE_CHAIN_ID =
   CHAIN_TARGET === "xlayer"
@@ -17,7 +18,7 @@ export const ACTIVE_EXPLORER_BASE =
     ? (import.meta.env.VITE_XLAYER_EXPLORER_BASE as string | undefined)
     : (import.meta.env.VITE_HASHKEY_EXPLORER_BASE as string | undefined)) ||
   (CHAIN_TARGET === "xlayer"
-    ? "https://www.okx.com/explorer/xlayer/testnet"
+    ? "https://www.okx.com/web3/explorer/xlayer-test"
     : HASHKEY_EXPLORER_BASE);
 
 export const ACTIVE_NATIVE_SYMBOL =
