@@ -251,16 +251,26 @@ if (initSupabase()) {
 
 // --- API Routes ---
 
-// Health
+// Health — must never throw: Railway/Docker healthchecks have no chain env on first deploy.
 app.get("/health", (req, res) => {
-    const cfg = loadActiveEvmChainFromEnv();
-    res.json({
-        status: "ok",
-        network: cfg.target,
-        chainId: cfg.chainId,
-        label: cfg.networkLabel,
-        llmEnabled: !!GROQ_API_KEY,
-    });
+    try {
+        const cfg = loadActiveEvmChainFromEnv();
+        res.json({
+            status: "ok",
+            network: cfg.target,
+            chainId: cfg.chainId,
+            label: cfg.networkLabel,
+            llmEnabled: !!GROQ_API_KEY,
+        });
+    } catch (e: any) {
+        res.status(200).json({
+            status: "degraded",
+            llmEnabled: !!GROQ_API_KEY,
+            chainConfigured: false,
+            hint: "Set KAIROS_CHAIN_TARGET and XLAYER_RPC_URL (+ KAIROS_TREASURY_PRIVATE_KEY) or HASHKEY_* for legacy.",
+            error: String(e?.message || e || "chain_env_incomplete"),
+        });
+    }
 });
 
 // Chain (active EVM) balance
@@ -1041,15 +1051,22 @@ app.post("/ratings", async (req, res) => {
 
 // Payments run on the active EVM chain target.
 
-// Start Server
-app.listen(PORT, () => {
-    const chain = loadActiveEvmChainFromEnv();
+// Start Server — bind 0.0.0.0 so Railway/Docker healthchecks can reach the process (not only localhost).
+const HOST = process.env.HOST || "0.0.0.0";
+app.listen(Number(PORT), HOST, () => {
+    let networkLine = "(chain env not loaded — check /health)";
+    try {
+        const chain = loadActiveEvmChainFromEnv();
+        networkLine = String(chain.networkLabel || chain.target);
+    } catch {
+        /* banner only */
+    }
     console.log(`
 ╔═══════════════════════════════════════════════════════════╗
 ║          KAIROS: XLAYER AGENT MARKETPLACE                ║
 ╠═══════════════════════════════════════════════════════════╣
-║  URL:       http://localhost:${PORT}                         ║
-║  Network:   ${String(chain.networkLabel || chain.target).padEnd(41).slice(0, 41)}║
+║  Listening: http://${HOST}:${PORT}                            ║
+║  Network:   ${networkLine.padEnd(41).slice(0, 41)}║
 ╚═══════════════════════════════════════════════════════════╝
     `);
 });
