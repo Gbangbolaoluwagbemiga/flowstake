@@ -425,7 +425,7 @@ async function synthesizeWalletExplainer(userPrompt: string, toolJson: Record<st
                 {
                     role: "system",
                     content:
-                        "You are Kairos Chain Scout (HashKey / EVM). The user asked about a wallet address.\n" +
+                        "You are Kairos **Chain Scout**, the **HashKey Chain (EVM)** infrastructure specialist (this deployment uses the project’s HashKey RPC; default demo **chainId 133** testnet). The user asked about a wallet address.\n" +
                         "You MUST ground every factual claim in WALLET_JSON only. Never invent balances, labels, or chain IDs.\n\n" +
                         "Output exactly two sections with these headings:\n" +
                         "### Risks (3–6 short bullets)\n" +
@@ -1063,8 +1063,8 @@ Tool routing:
 - Prices/ATH/market cap: getPriceData
 - Headlines: getNews
 - DeFi yields: getYields
-- HashKey testnet activity (recent blocks, gas, native HSK in motion): getHashKeyPulse
-- HashKey/EVM account facts (0x...): getChainAccount (for “explain / analyze / review my wallet”, same tool — the app adds risks + next actions)
+- **Chain Scout (HashKey native)**: getHashKeyPulse = live **testnet head block**, **per-block tx counts**, **EIP-1559 base fee** (when RPC returns it), **gas-used ratio**, **native HSK** approximated as Σ **tx.value** over recent blocks (chainId **133**). getChainAccount = **native HSK balance**, **nonce**, **EOA vs contract** for any **0x** on the same RPC.
+- “Explain / analyze / review my wallet” + 0x uses getChainAccount; the app may append grounded risks + next actions.
 - DEX volumes (per chain): getDexVolumes
 - Bridges/cross-chain: getBridges
 - Protocol TVL/fees: getProtocolStats
@@ -1099,6 +1099,11 @@ You facilitate a multi-agent economy where agents can pay each other on-chain us
 - You operate exclusively in the crypto/blockchain/DeFi space, with a special focus on HashKey Chain (EVM) and the HSK token.
 - Prefer HashKey/EVM terminology (EOA/contract, gas, wei/ether units, chainId=133).
 
+**CHAIN SCOUT — HashKey infrastructure specialist (not a generic “block explorer bot”):**
+- Answers about **HashKey testnet liveness** (head block, congestion signal, recent activity) must come from **getHashKeyPulse** JSON: **latestBlock**, **latestBaseFeeGwei** (gas price signal when present), **blocks[]** (number, txCount, gasUsedRatio, nativeMovedHsk), **chainId**, **rpcHost** hint.
+- Answers about **a specific address** on this network use **getChainAccount**: **balanceHsk** (native), **nonce**, **isContract** — always tie numbers to **HashKey Chain testnet (chainId 133)** when the tools say so.
+- If the user asks “**what’s gas on HashKey**”, “**current block**”, “**network pulse**”, or “**is this address an EOA**”, route to **getHashKeyPulse** and/or **getChainAccount** as appropriate; do not substitute generic web search for those RPC-backed facts.
+
 **On-chain payments (NEVER mention in responses):**
 - Payments happen automatically behind the scenes — the UI shows them as badges.
 - **NEVER** include any sentence about payments, amounts, "paid", "received", or "earned" in your response text. The payment UI handles disclosure.
@@ -1106,7 +1111,7 @@ You facilitate a multi-agent economy where agents can pay each other on-chain us
 
 **Your Capabilities:**
 - PRICE ORACLE: Real-time prices for any crypto (HSK, USDC, BTC, ETH, etc.) via CoinGecko.
-- CHAIN SCOUT: HashKey testnet chain pulse (live blocks via RPC) and 0x account facts (balance, nonce, contract detection).
+- CHAIN SCOUT: **HashKey testnet native** — live **block height & pulse** (getHashKeyPulse: base fee / gas signal, tx counts, native HSK in tx.value over a block window) plus **per-address** native balance, nonce, and contract detection (getChainAccount) on **chainId 133** via the deployment’s HashKey RPC.
 - NEWS SCOUT: Real-time crypto news and sentiment analysis.
 - PERP STATS: Perpetual futures funding rates, open interest, and volume.
 - PROTOCOL STATS: DeFi protocol TVL, fees, and revenue via DeFiLlama.
@@ -1342,7 +1347,7 @@ const getDexVolumesFunction = {
 const getChainAccountFunction = {
     name: "getChainAccount",
     description:
-        "Get basic HashKey/EVM account facts: native balance, nonce, whether it is a contract. Use when users paste an 0x address, ask to explain/analyze/review a wallet, or say 'my wallet' with an address.",
+        "HashKey Chain (EVM) account probe via the deployment RPC: native **HSK** balance (wei→ether), **transaction count (nonce)**, and **contract vs EOA** (code at address). Use for pasted **0x** addresses, 'what is my balance on HashKey', 'is this a contract', or wallet explain/analyze flows on **testnet/mainnet as configured** (default demo: chainId 133).",
     parameters: {
         type: SchemaType.OBJECT,
         properties: {
@@ -1355,7 +1360,7 @@ const getChainAccountFunction = {
 const getHashKeyPulseFunction = {
     name: "getHashKeyPulse",
     description:
-        "Live HashKey Chain testnet pulse via JSON-RPC: latest block, recent block summaries (tx count, gas used ratio, sum of native tx.value per block), chainId, optional EIP-1559 base fee. Use for HashKey testnet activity, 'what is happening on chain', recent blocks, or network health (not token prices).",
+        "HashKey-native **live chain pulse** via JSON-RPC (deployment `HASHKEY_RPC_URL`): **current head block height**, optional **EIP-1559 base fee** (native **gas price** signal), **per-block tx counts**, **block gas-used ratio**, and **native HSK** approximated as the sum of **tx.value** in each sampled block. Returns **chainId** (133 = HashKey testnet). Use for 'latest block', 'network health', 'gas on HashKey', 'how busy is the chain', or 'show last N blocks' — not for CoinGecko token prices.",
     parameters: {
         type: SchemaType.OBJECT,
         properties: {

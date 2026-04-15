@@ -65,7 +65,7 @@ kairos-backend/      Node.js + Express + TypeScript (deployed on Railway)
   rag-corpus/
     kairos-knowledge.md   Domain knowledge for RAG
     sources.urls          External URLs indexed at startup
-hashkey-contracts/      Foundry: `AgentRegistry.sol`, `SpendingPolicy.sol`
+hashkey-contracts/      Foundry: `AgentRegistry.sol`, `SpendingPolicy.sol`, `script/verify-deployed.sh`
 ```
 
 ---
@@ -281,8 +281,6 @@ Features:
 
 Contract methods: `setDailyLimit`, `getStatus`, `remaining`, `canSpend`, `recordSpend`
 
-The Price Oracle agent has a 10 USDC/day spending limit set as a demo.
-
 ---
 
 ## Agentic Payments (EVM)
@@ -312,6 +310,7 @@ Browse all 9 agents, see ratings, response times, and pricing. Connect to view y
 - [x] **Open-source repo** — Full source code with detailed README
 - [x] **Video demo** — Shows agent queries, payments, A2A coordination
 - [x] **HashKey testnet interaction** — Real HSK payments + EVM contracts
+- [ ] **Verified contracts** — `AgentRegistry` + `SpendingPolicy` green-checked on [testnet explorer](https://testnet-explorer.hsk.xyz)
 - [x] **Agent-to-agent payments** — Primary agent pays sub-agents
 - [x] **Agent wallets** — 9 independent EVM accounts
 - [x] **On-chain registry** — EVM smart contract
