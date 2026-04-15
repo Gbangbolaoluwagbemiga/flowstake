@@ -4,7 +4,7 @@ import { ArrowRight, Copy, ExternalLink, Wallet, Zap } from 'lucide-react';
 import { useWallet } from '@/contexts/WalletContext';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
-import { addressUrl, KAIROS_API_URL } from '@/lib/hashkey';
+import { ACTIVE_CHAIN_ID, ACTIVE_NATIVE_SYMBOL, CHAIN_LABEL, addressUrl, KAIROS_API_URL } from '@/lib/chain';
 
 export default function Deposit() {
   const { isConnected, address, balance, refreshBalance, chainOk } = useWallet();
@@ -27,11 +27,11 @@ export default function Deposit() {
 
     setIsRequesting(true);
     try {
-      toast.info('Requesting funds from HashKey testnet faucet...');
-      const res = await fetch(`${KAIROS_API_URL}/api/hashkey/faucet`, {
+      toast.info(`Requesting funds from ${CHAIN_LABEL} faucet...`);
+      const res = await fetch(`${KAIROS_API_URL}/api/chain/faucet`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ address, amount: "0.05" }),
+        body: JSON.stringify({ address, amount: "0.01" }),
       });
       const data = await res.json();
       if (data.success) {
@@ -70,7 +70,7 @@ export default function Deposit() {
           <div className="pb-3">
             <h1 className="text-2xl font-medium text-foreground tracking-tight">Fund Your Wallet</h1>
             <p className="text-sm text-muted-foreground mt-0.5">
-              Fund your HashKey (EVM) wallet with HSK to start querying agents
+              Fund your EVM wallet with {ACTIVE_NATIVE_SYMBOL} to start querying agents
             </p>
           </div>
 
@@ -83,7 +83,7 @@ export default function Deposit() {
             <div className="space-y-6">
               {!chainOk && (
                 <div className="glass-card p-4 border border-rose-500/20 bg-rose-500/5 text-sm text-rose-200">
-                  Your wallet is not on HashKey Testnet. Switch to chainId 133 to see correct balances and receipts.
+                  Your wallet is not on {CHAIN_LABEL}. Switch to chainId {ACTIVE_CHAIN_ID} to see correct balances and receipts.
                 </div>
               )}
               {/* Current Balance */}
@@ -95,7 +95,7 @@ export default function Deposit() {
                 </p>
                 <div className="flex items-center gap-1.5 mt-3">
                   <span className="status-dot" />
-                  <span className="text-xs text-muted-foreground">HashKey Chain Testnet</span>
+                  <span className="text-xs text-muted-foreground">{CHAIN_LABEL}</span>
                 </div>
               </div>
 
@@ -104,7 +104,7 @@ export default function Deposit() {
                 <h2 className="text-lg font-medium text-foreground mb-4">Your Wallet Address</h2>
                 <div className="bg-secondary rounded-lg p-4 border border-border/30">
                   <p className="text-xs text-muted-foreground mb-2">
-                    Send HSK on HashKey testnet to this address
+                    Send {ACTIVE_NATIVE_SYMBOL} on {CHAIN_LABEL} to this address
                   </p>
                   <div className="flex items-center gap-2">
                     <code className="flex-1 text-sm font-mono text-foreground/80 break-all">
@@ -126,7 +126,7 @@ export default function Deposit() {
                   className="inline-flex items-center gap-1.5 mt-3 text-xs text-muted-foreground hover:text-foreground transition-colors"
                 >
                   <ExternalLink className="w-3 h-3" />
-                  View on HashKey Explorer
+                  View on Explorer
                 </a>
               </div>
 
@@ -137,7 +137,7 @@ export default function Deposit() {
                   <h2 className="text-lg font-medium text-foreground">Testnet Faucet</h2>
                 </div>
                 <p className="text-sm text-muted-foreground mb-4">
-                  Request a small amount of HSK on HashKey testnet to try Kairos agents. Limited to one request per 24 hours.
+                  Request a small amount of {ACTIVE_NATIVE_SYMBOL} on {CHAIN_LABEL} to try Kairos agents. Limited to one request per 24 hours.
                 </p>
                 <button
                   onClick={handleFaucetRequest}

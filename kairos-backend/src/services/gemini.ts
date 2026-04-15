@@ -14,9 +14,10 @@ import * as tokenomicsService from "./tokenomics-service.js";
 import * as defillamaDex from "./defillama.js";
 import { retrieveRagAugmentation, type RagSource } from "./rag.js";
 import { ethers } from "ethers";
-import { loadHashkeyConfigFromEnv, sendTreasuryPayment as sendHashkeyTreasuryPayment, sendAgentToAgentPayment as sendHashkeyA2A } from "./hashkey.js";
+import { sendTreasuryPayment as sendHashkeyTreasuryPayment, sendAgentToAgentPayment as sendHashkeyA2A } from "./hashkey.js";
 import { resolveAgentEvm } from "./agent-registry-evm.js";
 import { fetchHashKeyChainPulse } from "./hashkey-chain-pulse.js";
+import { loadActiveEvmChainFromEnv } from "./evm-chain.js";
 
 const KAIROS_PAYMENTS = (process.env.KAIROS_PAYMENTS || "hashkey").trim().toLowerCase(); // "hashkey" | "off"
 const USE_HASHKEY = !KAIROS_PAYMENTS.startsWith("off");
@@ -138,9 +139,9 @@ async function sendAgentToAgentPayment(
 ): Promise<A2APayment | undefined> {
     if (PAYMENTS_OFF) return undefined;
     if (USE_HASHKEY) {
-        const rpcUrl = (process.env.HASHKEY_RPC_URL || "").trim();
-        if (!rpcUrl) return undefined;
-        const chainId = process.env.HASHKEY_CHAIN_ID ? Number(process.env.HASHKEY_CHAIN_ID) : undefined;
+        const cfg = loadActiveEvmChainFromEnv();
+        const rpcUrl = cfg.rpcUrl;
+        const chainId = cfg.chainId;
 
         const toMeta = await resolveAgentEvm({
             rpcUrl,
@@ -156,7 +157,7 @@ async function sendAgentToAgentPayment(
             return undefined;
         }
 
-        const amountWei = ethers.parseEther(process.env.KAIROS_A2A_PRICE_HSK || "0.0005");
+        const amountWei = ethers.parseEther(process.env.KAIROS_A2A_PRICE_NATIVE || process.env.KAIROS_A2A_PRICE_HSK || "0.0005");
         return runAgentSerialized(fromAgentId, async () => {
             try {
                 const txHash = await sendHashkeyA2A({
@@ -193,7 +194,7 @@ async function sendAgentPayment(agentId: string, label: string): Promise<string 
     if (PAYMENTS_OFF) return undefined;
     if (USE_HASHKEY) {
         try {
-            const cfg = loadHashkeyConfigFromEnv();
+            const cfg = loadActiveEvmChainFromEnv();
             const rpcUrl = cfg.rpcUrl;
             const chainId = cfg.chainId;
             const registryAddress = (process.env.KAIROS_AGENT_REGISTRY_EVM_ADDRESS || "").trim() || undefined;
@@ -201,7 +202,9 @@ async function sendAgentPayment(agentId: string, label: string): Promise<string 
 
             const agent = await resolveAgentEvm({ rpcUrl, chainId, registryAddress, agentKey: agentId });
             if (!agent?.owner) return undefined;
-            const amountWei = agent.priceWei || ethers.parseEther(process.env.KAIROS_DEFAULT_AGENT_PRICE_HSK || "0.001");
+            const amountWei =
+                agent.priceWei ||
+                ethers.parseEther(process.env.KAIROS_DEFAULT_AGENT_PRICE_NATIVE || process.env.KAIROS_DEFAULT_AGENT_PRICE_HSK || "0.001");
 
             // Serialize treasury txs to avoid nonce races
             return await runTreasurySerialized(async () => {
@@ -213,11 +216,13 @@ async function sendAgentPayment(agentId: string, label: string): Promise<string 
                     label,
                     spendingPolicy: { spendingPolicyAddress },
                 });
-                console.log(`[HashKey] ✅ Paid Agent ${agentId} (${ethers.formatEther(amountWei)} HSK): ${txHash}`);
+                console.log(
+                    `[EVM] ✅ Paid Agent ${agentId} (${ethers.formatEther(amountWei)} ${String(cfg.nativeSymbol || "NATIVE")}): ${txHash}`
+                );
                 return txHash;
             });
         } catch (e: any) {
-            console.error(`[HashKey] ❌ Payment failed for ${agentId}:`, e?.message || e);
+            console.error(`[EVM] ❌ Payment failed for ${agentId}:`, e?.message || e);
             return undefined;
         }
     }
@@ -1012,7 +1017,7 @@ async function handleGetDexVolumes(chain?: string, receiptSink?: (agentId: strin
 
 // Chain Scout: basic HashKey account facts
 async function handleGetChainAccount(address: string, receiptSink?: (agentId: string, txHash: string) => void) {
-    const cfg = loadHashkeyConfigFromEnv();
+    const cfg = loadActiveEvmChainFromEnv();
     const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId);
     const payP = createChainScoutPayment(`acct:${address}`);
     void payP.then((h) => { if (h) receiptSink?.("chain-scout", h); }).catch(() => {});
@@ -1025,7 +1030,8 @@ async function handleGetChainAccount(address: string, receiptSink?: (agentId: st
     return {
         data: JSON.stringify({
             address,
-            balanceHsk: ethers.formatEther(bal),
+            balanceNative: ethers.formatEther(bal),
+            nativeSymbol: cfg.nativeSymbol,
             nonce,
             isContract: code !== "0x",
         }),
@@ -1039,7 +1045,7 @@ async function handleGetHashKeyPulse(
 ): Promise<{ data: string; txHash?: string }> {
     const depth = Math.min(20, Math.max(1, depthArg ?? 5));
     console.log(`[Gemini] ⛓️ HashKey chain pulse (depth=${depth})...`);
-    const cfg = loadHashkeyConfigFromEnv();
+    const cfg = loadActiveEvmChainFromEnv();
     const payP = createChainScoutPayment(`pulse:${depth}`);
     void payP.then((h) => { if (h) receiptSink?.("chain-scout", h); }).catch(() => {});
     try {
@@ -1051,7 +1057,7 @@ async function handleGetHashKeyPulse(
         return {
             data: JSON.stringify({
                 error: msg,
-                hint: "Verify HASHKEY_RPC_URL and HASHKEY_CHAIN_ID (133) in kairos-backend/.env.",
+                hint: "Verify KAIROS_CHAIN_TARGET + the corresponding RPC env vars (HASHKEY_RPC_URL/HASHKEY_CHAIN_ID or XLAYER_RPC_URL/XLAYER_CHAIN_ID).",
             }),
         };
     }

@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { useState, useEffect } from 'react';
 import { useWallet } from '@/contexts/WalletContext';
 import { PaymentPulse } from './PaymentPulse';
-import { txUrl } from '@/lib/hashkey';
+import { txUrl } from '@/lib/chain';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 

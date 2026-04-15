@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react';
 import { toast } from 'sonner';
-import { HASHKEY_CHAIN_ID, KAIROS_API_URL } from '@/lib/hashkey';
+import { ACTIVE_CHAIN_ID, CHAIN_LABEL, KAIROS_API_URL } from '@/lib/chain';
 import { ethers } from 'ethers';
 
 interface WalletContextType {
@@ -34,9 +34,9 @@ export function WalletProvider({ children }: { children: ReactNode }) {
   const refreshBalance = useCallback(async () => {
     if (!address) return;
     try {
-      const response = await fetch(`${KAIROS_API_URL}/api/hashkey/balance/${address}`);
+      const response = await fetch(`${KAIROS_API_URL}/api/chain/balance/${address}`);
       const data = await response.json();
-      if (typeof data?.hsk === 'string') setBalance(data.hsk);
+      if (typeof data?.balance === 'string') setBalance(data.balance);
       failCountRef.current = 0; // Reset on success
     } catch (error) {
       failCountRef.current++;
@@ -73,16 +73,16 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       // Ensure chain is HashKey testnet
       const hexChainId = await eth.request({ method: 'eth_chainId' });
       const current = Number.parseInt(String(hexChainId), 16);
-      if (current !== HASHKEY_CHAIN_ID) {
+      if (current !== ACTIVE_CHAIN_ID) {
         setChainOk(false);
         try {
           await eth.request({
             method: 'wallet_switchEthereumChain',
-            params: [{ chainId: `0x${HASHKEY_CHAIN_ID.toString(16)}` }],
+            params: [{ chainId: `0x${ACTIVE_CHAIN_ID.toString(16)}` }],
           });
           setChainOk(true);
         } catch {
-          toast.error(`Please switch your wallet network to HashKey Testnet (chainId ${HASHKEY_CHAIN_ID}).`);
+          toast.error(`Please switch your wallet network to ${CHAIN_LABEL} (chainId ${ACTIVE_CHAIN_ID}).`);
         }
       } else {
         setChainOk(true);

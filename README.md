@@ -1,15 +1,17 @@
-# Kairos — HashKey Agentic Marketplace
+# Kairos — The Agentic Economy on X Layer (Testnet)
 
-> **Multi-agent AI for crypto & DeFi on HashKey Chain (EVM): routed specialists, tool-grounded answers, and native HSK settlement — with optional on-chain spending policy.**
+> **Multi-agent AI for crypto & DeFi with agentic wallets, on-chain settlement, and a repeatable “earn → pay → earn” loop. For hackathon mode, Kairos runs on X Layer testnet (chainId 1952) and produces judge-friendly explorer proofs.**
 
 ---
 
 ## What Kairos Does
 
-Kairos is the **agent + money** layer for crypto copilots: specialists fetch real market structure (prices, headlines, TVL, yields, bridges, perps), an orchestrator keeps answers **grounded in tool output**, and **treasury → agent** flows use **native HSK** on HashKey testnet—with **agent-to-agent (A2A)** demos when multiple specialists coordinate.
+Kairos is the **agent + money** layer for crypto copilots: specialists fetch real market structure (prices, headlines, TVL, yields, bridges, perps), an orchestrator keeps answers **grounded in tool output**, and **on-chain settlement** runs through **agentic wallets**. In hackathon mode, the onchain identity and activity are on **X Layer testnet (chainId 1952)**.
+
+**Name note:** there is an unrelated project name “KairosLab” in the ecosystem. This repository is **not** a fork or affiliate of that project; it is our own hackathon build focused on X Layer + agentic wallets.
 
 **Key differentiators:**
-- ✅ **Native HSK micropayments** — Treasury pays agent owners per specialist invocation (when settlement succeeds)
+- ✅ **Native-token micropayments** — Treasury pays agent owners per specialist invocation (when settlement succeeds)
 - ✅ **Agent-to-agent (A2A) commerce** — Agents pay each other for sub-tasks
 - ✅ **On-chain registry** — Nine agents resolvable from `AgentRegistry` + env fallbacks
 - ✅ **Auditable** — Explorer links for successful transfers; receipts API for late hashes
@@ -23,13 +25,61 @@ Kairos is the **agent + money** layer for crypto copilots: specialists fetch rea
 | News Scout | `news` | Crypto headlines (aggregated RSS) |
 | Yield Optimizer | `yield` | DeFi yields across 500+ protocols |
 | Tokenomics Analyzer | `tokenomics` | Supply, unlocks, inflation models |
-| Chain Scout | `chain-scout` | HashKey testnet **chain pulse** + **Explain my wallet** (0x → snapshot, risks, next actions) + 0x account facts |
+| Chain Scout | `chain-scout` | X Layer testnet **chain pulse** + **Explain my wallet** (0x → snapshot, risks, next actions) + 0x account facts |
 | Perp Stats | `perp` | Perpetual futures, funding rates, open interest |
 | Protocol Stats | `protocol` | TVL, fees, revenue via DeFiLlama |
 | Bridge Monitor | `bridges` | Cross-chain bridge volumes |
 | DEX Volumes | `dex-volumes` | Top DEX volumes by chain (DeFiLlama) |
 
 ---
+
+## Hackathon: Judge Quickstart (3–5 minutes)
+
+1) **Set chain target to X Layer**
+- Backend: `KAIROS_CHAIN_TARGET=xlayer`
+- Frontend: `VITE_CHAIN_TARGET=xlayer`
+
+2) **Verify contracts on explorer**
+- Deploy: `xlayer-contracts/script/deploy-xlayer.sh`
+- Verify: use the **OKX X Layer testnet explorer** “Verify and publish your smart contract” page (no OKLink API key required)
+
+3) **Run the onchain activity loop**
+- Call `POST /api/demo/run-cycles` (suggested: `cycles=50`, `fundAgents=true`)
+- Result JSON includes **tx hashes + explorer links**
+
+4) **Show Uniswap integration (mandatory module)**
+- Call `GET /api/uniswap/v3/quote?tokenIn=...&tokenOut=...&fee=3000&amountIn=...`
+- This directly queries Uniswap V3 Quoter (configurable via `UNISWAP_*` env vars)
+
+## Proof Pack (paste before submitting)
+
+- **X Layer testnet chain**: `chainId 1952`
+- **AgentRegistry (verified ✅)**: `0x7e7b5dbaE3aDb3D94a27DCfB383bDB98667145E6` (verified in OKX explorer)
+- **SpendingPolicy (verified ✅)**: `0x3f00dB811A4Ab36e7a953a9C9bC841499fC2EAF6` (verified in OKX explorer)
+- **Agentic wallet identities table**: see below
+- **5 representative txs** (different senders / types):
+  - Funding (treasury → oracle): `https://www.okx.com/web3/explorer/xlayer-test/tx/0xa5bf07318f2f4c61892fb0ddbb138f219fcebeb18a149cd53a4edc481288a3e1`
+  - Funding (treasury → news): `https://www.okx.com/web3/explorer/xlayer-test/tx/0x2b00a1ba18fa5bb3ff3b11b1aa0c09d5fd44a266ef13fa47e6c9434828ff6b2a`
+  - A2A (oracle → yield): `https://www.okx.com/web3/explorer/xlayer-test/tx/0x14a301fbcb71b4fe7324e7086790bbe71921604271679c2e83cfb807ce6571cb`
+  - A2A (perp → protocol): `https://www.okx.com/web3/explorer/xlayer-test/tx/0x4ff311dfa0f5bf135dddc4e92b1cba2b9816e05361969aa445da0193582b5f4a`
+  - A2A (chain-scout → news): `https://www.okx.com/web3/explorer/xlayer-test/tx/0x047e4a5331b4f099081f11f3415d04ed9d6aa4fbf53bbf998a88bd4aed3f654c`
+
+## Agentic Wallet Identity (onchain)
+
+Create one orchestrator treasury wallet + 9 specialist wallets. For judge friendliness, paste explorer links here:
+
+| Agent | Role | Address | Explorer |
+|---|---|---|---|
+| `treasury` | Orchestrator / payer | `<0x...>` | `<link>` |
+| `oracle` | Price Oracle | `<0x...>` | `<link>` |
+| `news` | News Scout | `<0x...>` | `<link>` |
+| `yield` | Yield Optimizer | `<0x...>` | `<link>` |
+| `tokenomics` | Tokenomics Analyzer | `<0x...>` | `<link>` |
+| `perp` | Perp Stats | `<0x...>` | `<link>` |
+| `chain-scout` | Chain Scout | `<0x...>` | `<link>` |
+| `protocol` | Protocol Stats | `<0x...>` | `<link>` |
+| `bridges` | Bridge Monitor | `<0x...>` | `<link>` |
+| `dex-volumes` | DEX Volumes | `<0x...>` | `<link>` |
 
 ## Architecture
 
@@ -44,6 +94,8 @@ kairos-backend/      Node.js + Express + TypeScript (deployed on Railway)
       gemini.ts           AI orchestrator (Groq) — routing, synthesis, on-chain payments
       search.ts           Web research (Tavily / Brave when configured; honest Groq fallback)
       agent-registry-evm.ts EVM agent registry reader (on-chain + env fallback)
+      evm-chain.ts        Active EVM chain config (hashkey vs xlayer)
+      uniswap-v3.ts        Uniswap V3 quote (Quoter) integration
       price-oracle.ts     CoinGecko integration
       news-scout.ts       Crypto RSS headlines
       yield-optimizer.ts  DeFi yield aggregation
@@ -65,7 +117,7 @@ kairos-backend/      Node.js + Express + TypeScript (deployed on Railway)
   rag-corpus/
     kairos-knowledge.md   Domain knowledge for RAG
     sources.urls          External URLs indexed at startup
-hashkey-contracts/      Foundry: `AgentRegistry.sol`, `SpendingPolicy.sol`, `script/verify-deployed.sh`
+xlayer-contracts/      Foundry: `AgentRegistry.sol`, `SpendingPolicy.sol`, `script/deploy-xlayer.sh`, `script/verify-deployed-xlayer.sh`
 ```
 
 ---
@@ -74,14 +126,14 @@ hashkey-contracts/      Foundry: `AgentRegistry.sol`, `SpendingPolicy.sol`, `scr
 
 ### Prerequisites
 - Node.js 20+
-- A funded HashKey testnet account (treasury)
+- A funded EVM account (treasury) on your target chain
 - MetaMask (or compatible EVM wallet)
 
 ### Backend
 
 ```bash
 cd kairos-backend
-cp .env.example .env   # fill in required values
+cp .env.example .env   # fill in required values (or create kairos-backend/.env)
 npm install
 npm run dev
 ```
@@ -117,9 +169,13 @@ The server loads **`kairos-backend/.env` by file path** (not only `process.cwd()
 |---|---|
 | `GROQ_API_KEY` | Groq API key (OpenAI-compatible) |
 | `GROQ_MODEL` | Groq model id (default `llama-3.3-70b-versatile`) |
-| `HASHKEY_TREASURY_PRIVATE_KEY` | Treasury private key (0x...) |
-| `HASHKEY_RPC_URL` | HashKey testnet RPC (default `https://testnet.hsk.xyz`) |
-| `HASHKEY_CHAIN_ID` | `133` |
+| `KAIROS_CHAIN_TARGET` | `xlayer` (hackathon) or `hashkey` (legacy) |
+| `KAIROS_TREASURY_PRIVATE_KEY` | Treasury private key (0x...) (preferred, works for any chain target) |
+| `XLAYER_RPC_URL` | X Layer RPC |
+| `XLAYER_CHAIN_ID` | `195` |
+| `XLAYER_EXPLORER_BASE` | e.g. `https://www.okx.com/explorer/xlayer/testnet` |
+| `HASHKEY_RPC_URL` | HashKey RPC (legacy target) |
+| `HASHKEY_CHAIN_ID` | `133` (legacy target) |
 | `KAIROS_AGENT_REGISTRY_EVM_ADDRESS` | Deployed `AgentRegistry` address |
 | `KAIROS_SPENDING_POLICY_EVM_ADDRESS` | Deployed `SpendingPolicy` address (optional) |
 | `KAIROS_SPENDING_POLICY_STRICT` | `1` = block payout if `canSpend` reverts. Default `0` = still pay (direct treasury transfer) when the policy call reverts — fixes stuck “Confirming” when ABI/policy mismatches. |
@@ -148,6 +204,29 @@ BRIDGES_EVM_ADDRESS
 DEX_VOLUMES_EVM_ADDRESS
 ```
 
+**Agent private keys (required for demo loop / A2A):**
+
+```
+ORACLE_EVM_PRIVATE_KEY
+NEWS_EVM_PRIVATE_KEY
+YIELD_EVM_PRIVATE_KEY
+TOKENOMICS_EVM_PRIVATE_KEY
+PERP_EVM_PRIVATE_KEY
+CHAIN_SCOUT_EVM_PRIVATE_KEY
+PROTOCOL_EVM_PRIVATE_KEY
+BRIDGES_EVM_PRIVATE_KEY
+DEX_VOLUMES_EVM_PRIVATE_KEY
+```
+
+**Uniswap (mandatory module):**
+
+| Variable | Default | Description |
+|---|---:|---|
+| `UNISWAP_CHAIN_ID` | `1` | Chain used for quoting |
+| `UNISWAP_RPC_URL` | `https://eth.llamarpc.com` | RPC for Uniswap quotes |
+| `UNISWAP_V3_QUOTER_ADDRESS` | mainnet QuoterV2 | Quoter address |
+| `UNISWAP_QUOTER_VERSION` | `v2` | `v2` or `v1` |
+
 **Optional (app degrades gracefully):**
 
 | Variable | Effect if missing |
@@ -169,6 +248,11 @@ index…` vs the one-line warning when keys are missing).
 |---|---|---|
 | `VITE_API_URL` | `http://localhost:3001` | Backend URL |
 | `VITE_ADMIN_ADDRESS` | _(empty)_ | Wallet address shown with Admin badge |
+| `VITE_CHAIN_TARGET` | `hashkey` | `xlayer` for hackathon |
+| `VITE_XLAYER_CHAIN_ID` | `195` | X Layer chainId |
+| `VITE_XLAYER_EXPLORER_BASE` | `https://www.okx.com/explorer/xlayer/testnet` | Explorer base |
+| `VITE_XLAYER_NATIVE_SYMBOL` | `OKB` | Native symbol label |
+| `VITE_XLAYER_NETWORK_LABEL` | `X Layer Testnet` | Network label |
 
 ---
 
@@ -210,10 +294,10 @@ Set `VITE_API_URL` to your Railway backend URL. `vercel.json` includes SPA rewri
 
 ## Payment Architecture
 
-Kairos implements two layers of on-chain payments — both are real HashKey (EVM) transactions, fully auditable.
+Kairos implements two layers of on-chain payments — fully auditable EVM transactions.
 
 ### Layer 1: Treasury → Agent
-Every user query triggers the treasury paying each specialist agent in native **HSK**. The payment fires before the response is returned and the tx hash is embedded in the UI.
+Every user query triggers the treasury paying each specialist agent in the chain’s **native token**. The payment fires before the response is returned and the tx hash is embedded in the UI.
 
 ```
 User query → Orchestrator → Agent A  →  0.01 USDC (treasury → oracle)
@@ -227,7 +311,7 @@ When multiple agents collaborate on a query, the primary agent pays the sub-agen
 Agent A (oracle) → Agent B (news)  →  0.005 USDC A2A payment
 ```
 
-Both payment layers are visible in the chat UI as clickable badges linking to HashKey Explorer.
+Both payment layers are visible in the chat UI as clickable badges linking to the active chain explorer.
 
 **Payment path:** Treasury (HSK) → Agent wallets (HSK, HashKey testnet)  
 **A2A protocol:** Agents hold their own funded wallets and sign transactions autonomously.
@@ -238,11 +322,11 @@ Both payment layers are visible in the chat UI as clickable badges linking to Ha
 
 | Layer | Technology |
 |---|---|
-| AI | Gemini 2.5 Flash (Google) |
-| Search grounding | Gemini Google Search (built-in) |
-| Blockchain | HashKey Chain (EVM) |
+| AI | Groq (OpenAI-compatible chat API) |
+| Search grounding | Tavily / Brave (optional) |
+| Blockchain | X Layer (hackathon) + EVM-compatible networks |
 | Smart contracts | Agent Registry + Spending Policy (Foundry) |
-| Payments | Native HSK micropayments + A2A sub-payments |
+| Payments | Native-token micropayments + A2A sub-payments |
 | Prices | CoinGecko API |
 | DeFi data | DeFiLlama API |
 | Database | Supabase (PostgreSQL) |
@@ -254,7 +338,7 @@ Both payment layers are visible in the chat UI as clickable badges linking to Ha
 
 ## Smart Contracts (EVM)
 
-Two contracts deployed to HashKey testnet:
+Two contracts deployed on the target EVM chain (X Layer for hackathon):
 
 ### 1. Agent Registry
 
@@ -305,12 +389,12 @@ Browse all 9 agents, see ratings, response times, and pricing. Connect to view y
 
 ---
 
-## Hackathon Submission Checklist
+## Hackathon Submission Checklist (X Layer)
 
 - [x] **Open-source repo** — Full source code with detailed README
 - [x] **Video demo** — Shows agent queries, payments, A2A coordination
-- [x] **HashKey testnet interaction** — Real HSK payments + EVM contracts
-- [ ] **Verified contracts** — `AgentRegistry` + `SpendingPolicy` green-checked on [testnet explorer](https://testnet-explorer.hsk.xyz)
+- [x] **X Layer interaction** — Real transactions on chainId 1952 (testnet demo loop)
+- [ ] **Verified contracts** — `AgentRegistry` + `SpendingPolicy` verified on OKX X Layer explorer
 - [x] **Agent-to-agent payments** — Primary agent pays sub-agents
 - [x] **Agent wallets** — 9 independent EVM accounts
 - [x] **On-chain registry** — EVM smart contract

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ArrowDownLeft, ArrowUpRight, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { txUrl } from '@/lib/hashkey';
+import { txUrl } from '@/lib/chain';
 
 interface Activity {
   id: string;

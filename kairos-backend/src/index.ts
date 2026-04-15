@@ -11,6 +11,10 @@ import { warmRagIndex } from "./services/rag.js";
 import { ethers } from "ethers";
 import { getHskBalance } from "./services/hashkey-chain.js";
 import { loadHashkeyConfigFromEnv } from "./services/hashkey.js";
+import { activeJsonRpcProvider, activeTreasuryAddress, loadActiveEvmChainFromEnv } from "./services/evm-chain.js";
+import { getUniswapV3Quote } from "./services/uniswap-v3.js";
+import { resolveAgentEvm } from "./services/agent-registry-evm.js";
+import { sendAgentToAgentPayment, sendTreasuryPayment } from "./services/hashkey.js";
 import {
     initSupabase,
     createChatSession,
@@ -118,12 +122,12 @@ type ActivityRow = {
  */
 async function evmPaymentFromTx(txHash: string): Promise<{ code: string; amount: string } | null> {
     try {
-        const cfg = loadHashkeyConfigFromEnv();
-        const provider = new ethers.JsonRpcProvider(cfg.rpcUrl, cfg.chainId);
+        const cfg = loadActiveEvmChainFromEnv();
+        const provider = activeJsonRpcProvider(cfg);
         const tx = await provider.getTransaction(txHash);
         if (!tx) return null;
         const value = tx.value ?? 0n;
-        return { code: "HSK", amount: ethers.formatEther(value) };
+        return { code: cfg.nativeSymbol, amount: ethers.formatEther(value) };
     } catch {
         return null;
     }
@@ -235,10 +239,9 @@ if (!isHashkeyMode) {
     console.warn("⚠️ KAIROS_PAYMENTS is not set to hashkey; this deployment expects HashKey mode.");
 }
 try {
-    const cfg = loadHashkeyConfigFromEnv();
-    const pk0x = cfg.treasuryPrivateKey.startsWith("0x") ? cfg.treasuryPrivateKey : `0x${cfg.treasuryPrivateKey}`;
-    const treasuryAddr = new ethers.Wallet(pk0x).address;
-    console.log(`🏦 Treasury Address (HashKey): ${treasuryAddr}`);
+    const cfg = loadActiveEvmChainFromEnv();
+    const treasuryAddr = activeTreasuryAddress(cfg);
+    console.log(`🏦 Treasury Address (${cfg.target}): ${treasuryAddr}`);
 } catch {
     console.warn("⚠️ HASHKEY_TREASURY_PRIVATE_KEY not configured");
 }
@@ -252,15 +255,34 @@ if (initSupabase()) {
 
 // Health
 app.get("/health", (req, res) => {
+    const cfg = loadActiveEvmChainFromEnv();
     res.json({
         status: "ok",
-        network: "hashkey-testnet",
-        chainId: 133,
+        network: cfg.target,
+        chainId: cfg.chainId,
+        label: cfg.networkLabel,
         llmEnabled: !!GROQ_API_KEY,
     });
 });
 
-// HashKey (EVM) balance
+// Chain (active EVM) balance
+app.get("/api/chain/balance/:address", async (req, res) => {
+    try {
+        const raw = String(req.params.address || "");
+        const address = raw.trim();
+        if (!ethers.isAddress(address)) return res.status(400).json({ error: "Invalid address" });
+        const checksummed = ethers.getAddress(address);
+
+        const cfg = loadActiveEvmChainFromEnv();
+        const provider = activeJsonRpcProvider(cfg);
+        const bal = await provider.getBalance(checksummed);
+        res.json({ address: checksummed, balance: ethers.formatEther(bal), symbol: cfg.nativeSymbol, chainId: cfg.chainId, target: cfg.target });
+    } catch (e: any) {
+        res.status(500).json({ error: e?.message || "Failed to fetch balance" });
+    }
+});
+
+// HashKey (EVM) balance (legacy route)
 app.get("/api/hashkey/balance/:address", async (req, res) => {
     try {
         const raw = String(req.params.address || "");
@@ -274,7 +296,184 @@ app.get("/api/hashkey/balance/:address", async (req, res) => {
     }
 });
 
-// HashKey testnet faucet (server-side transfer from treasury)
+// Chain (active EVM) faucet (server-side transfer from treasury)
+app.post("/api/chain/faucet", async (req, res) => {
+    try {
+        const { address: rawAddress, amount } = req.body as { address?: string; amount?: string };
+        const address = String(rawAddress || "").trim();
+        if (!address || !ethers.isAddress(address)) return res.status(400).json({ success: false, error: "Valid address required" });
+        const to = ethers.getAddress(address);
+
+        const amt = amount && typeof amount === "string" ? amount : "0.01";
+        const value = ethers.parseEther(amt);
+        const cfg = loadActiveEvmChainFromEnv();
+        const provider = activeJsonRpcProvider(cfg);
+        const wallet = new ethers.Wallet(cfg.treasuryPrivateKey, provider);
+        const treasuryAddr = await wallet.getAddress();
+        if (to.toLowerCase() === treasuryAddr.toLowerCase()) {
+            return res.status(400).json({
+                success: false,
+                error: "Faucet destination is the treasury wallet. Switch to a different wallet/account to receive testnet funds.",
+            });
+        }
+        const tx = await wallet.sendTransaction({ to, value });
+        res.json({ success: true, txHash: tx.hash, amount: amt, token: cfg.nativeSymbol, to, chainId: cfg.chainId, target: cfg.target });
+    } catch (e: any) {
+        res.status(500).json({ success: false, error: e?.message || "Faucet failed" });
+    }
+});
+
+// Uniswap V3 quote (Ethereum mainnet by default; configurable via UNISWAP_* env vars)
+app.get("/api/uniswap/v3/quote", async (req, res) => {
+    try {
+        const tokenIn = String(req.query.tokenIn || "").trim();
+        const tokenOut = String(req.query.tokenOut || "").trim();
+        const fee = Number(req.query.fee || 3000);
+        const amountIn = String(req.query.amountIn || "").trim();
+        const sqrtPriceLimitX96 = String(req.query.sqrtPriceLimitX96 || "").trim();
+
+        if (!tokenIn || !tokenOut || !amountIn) {
+            return res.status(400).json({
+                success: false,
+                error: "Missing required query params: tokenIn, tokenOut, amountIn (raw units). Optional: fee, sqrtPriceLimitX96.",
+            });
+        }
+
+        const quote = await getUniswapV3Quote({
+            tokenIn,
+            tokenOut,
+            fee,
+            amountIn,
+            sqrtPriceLimitX96: sqrtPriceLimitX96 || undefined,
+        });
+
+        res.json({ success: true, ...quote, tokenIn, tokenOut, fee, amountIn });
+    } catch (e: any) {
+        res.status(500).json({ success: false, error: e?.message || "Quote failed" });
+    }
+});
+
+// Hackathon demo loop: generate many legitimate EVM txns (varied wallets) on the active chain.
+app.post("/api/demo/run-cycles", async (req, res) => {
+    try {
+        const cfg = loadActiveEvmChainFromEnv();
+        const cycles = Math.max(1, Math.min(500, Number(req.body?.cycles ?? 30) || 30));
+        const amount = String((req.body?.amount ?? process.env.KAIROS_DEMO_A2A_AMOUNT) || "0.00001");
+        const fundAgents = Boolean(req.body?.fundAgents ?? true);
+        const registryAddress = (process.env.KAIROS_AGENT_REGISTRY_EVM_ADDRESS || "").trim() || undefined;
+        const spendingPolicyAddress = (process.env.KAIROS_SPENDING_POLICY_EVM_ADDRESS || "").trim() || undefined;
+
+        const explorerBase =
+            (cfg.explorerBase || "").trim() ||
+            (cfg.target === "xlayer" ? "https://www.okx.com/web3/explorer/xlayer-test" : "");
+
+        const agentIds = [
+            "oracle",
+            "yield",
+            "tokenomics",
+            "perp",
+            "protocol",
+            "bridges",
+            "dex-volumes",
+            "chain-scout",
+            "news",
+        ] as const;
+
+        const agentPks: Record<string, string | undefined> = {
+            oracle: process.env.ORACLE_EVM_PRIVATE_KEY,
+            yield: process.env.YIELD_EVM_PRIVATE_KEY,
+            tokenomics: process.env.TOKENOMICS_EVM_PRIVATE_KEY,
+            perp: process.env.PERP_EVM_PRIVATE_KEY,
+            protocol: process.env.PROTOCOL_EVM_PRIVATE_KEY,
+            bridges: process.env.BRIDGES_EVM_PRIVATE_KEY,
+            "dex-volumes": process.env.DEX_VOLUMES_EVM_PRIVATE_KEY,
+            "chain-scout": process.env.CHAIN_SCOUT_EVM_PRIVATE_KEY,
+            news: process.env.NEWS_EVM_PRIVATE_KEY,
+        };
+
+        // Resolve recipient owners once (registry or env fallback)
+        const owners: Record<string, string> = {};
+        for (const id of agentIds) {
+            const meta = await resolveAgentEvm({
+                rpcUrl: cfg.rpcUrl,
+                chainId: cfg.chainId,
+                registryAddress,
+                agentKey: id,
+            });
+            if (!meta?.owner) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Missing onchain owner for agent "${id}". Set KAIROS_AGENT_REGISTRY_EVM_ADDRESS or ${id.toUpperCase().replace(/-/g, "_")}_EVM_ADDRESS.`,
+                });
+            }
+            owners[id] = meta.owner;
+        }
+
+        // Optional: fund all agents from treasury so A2A has gas + value.
+        const fundTxs: { agentId: string; txHash: string; url?: string }[] = [];
+        if (fundAgents) {
+            const fundWei = ethers.parseEther(String((req.body?.fundAmount ?? process.env.KAIROS_DEMO_FUND_AMOUNT) || "0.01"));
+            for (const id of agentIds) {
+                const txHash = await sendTreasuryPayment({
+                    cfg,
+                    to: owners[id],
+                    amountWei: fundWei,
+                    agentKey: id,
+                    label: `demo-fund:${id}`,
+                    spendingPolicy: { spendingPolicyAddress },
+                });
+                fundTxs.push({
+                    agentId: id,
+                    txHash,
+                    url: explorerBase ? `${explorerBase.replace(/\/$/, "")}/tx/${txHash}` : undefined,
+                });
+            }
+        }
+
+        // Run sequential A2A cycles to avoid per-wallet nonce collisions (simple + judge-friendly).
+        const amountWei = ethers.parseEther(amount);
+        const txs: { i: number; from: string; to: string; txHash: string; url?: string }[] = [];
+        for (let i = 0; i < cycles; i++) {
+            const from = agentIds[i % agentIds.length];
+            const to = agentIds[(i + 1) % agentIds.length];
+            const fromPk = (agentPks[from] || "").trim();
+            if (!fromPk || !fromPk.startsWith("0x")) {
+                return res.status(400).json({
+                    success: false,
+                    error: `Missing private key for "${from}" (env ${from.toUpperCase().replace(/-/g, "_")}_EVM_PRIVATE_KEY).`,
+                });
+            }
+
+            const txHash = await sendAgentToAgentPayment({
+                rpcUrl: cfg.rpcUrl,
+                chainId: cfg.chainId,
+                fromPrivateKey: fromPk,
+                to: owners[to],
+                amountWei,
+            });
+            txs.push({
+                i,
+                from,
+                to,
+                txHash,
+                url: explorerBase ? `${explorerBase.replace(/\/$/, "")}/tx/${txHash}` : undefined,
+            });
+        }
+
+        res.json({
+            success: true,
+            chain: { target: cfg.target, chainId: cfg.chainId, label: cfg.networkLabel, explorerBase: explorerBase || null },
+            fundTxs,
+            cycles,
+            amount,
+            txs,
+        });
+    } catch (e: any) {
+        res.status(500).json({ success: false, error: e?.message || "Demo loop failed" });
+    }
+});
+
+// HashKey testnet faucet (legacy route)
 app.post("/api/hashkey/faucet", async (req, res) => {
     try {
         const { address: rawAddress, amount } = req.body as { address?: string; amount?: string };
