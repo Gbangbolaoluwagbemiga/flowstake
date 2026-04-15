@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ArrowDownLeft, ArrowUpRight, ExternalLink } from 'lucide-react';
 import { cn } from '@/lib/utils';
-import { txUrl } from '@/lib/chain';
+import { ACTIVE_NATIVE_SYMBOL, txUrl } from '@/lib/chain';
 
 interface Activity {
   id: string;
@@ -11,7 +11,7 @@ interface Activity {
   responseTimeMs: number;
   /** Legacy field from older API */
   amount?: number;
-  /** Nominal HSK credit (dashboard math), not always what the tx used */
+  /** Nominal credit (dashboard math), not always what the tx used */
   nominalUsd?: number;
   txHash?: string;
   /** 'credit' = received payment (default), 'debit' = sent A2A payment */
@@ -89,7 +89,7 @@ export function ActivityFeed({ agentId }: ActivityFeedProps) {
             const isDebit = activity.direction === 'debit';
             const onChainAmt = activity.onChain
               ? `${activity.onChain.amount} ${activity.onChain.code}`
-              : `${Number(nominal).toFixed(4)} HSK`;
+              : `${Number(nominal).toFixed(4)} ${ACTIVE_NATIVE_SYMBOL}`;
             const amountLine = isDebit ? `-${onChainAmt}` : `+${onChainAmt}`;
             const amountColor = isDebit ? 'text-rose-400' : 'text-emerald-400';
             const label = isDebit ? 'A2A sent' : activity.type;
@@ -142,7 +142,7 @@ export function ActivityFeed({ agentId }: ActivityFeedProps) {
                       {shortTx(activity.txHash)}
                     </span>
                     <ExternalLink className="w-3.5 h-3.5 shrink-0 opacity-80" />
-                    <span className="sr-only">Open transaction on HashKey explorer</span>
+                    <span className="sr-only">Open transaction on explorer</span>
                   </a>
                 ) : showConfirming ? (
                   <span className="text-[10px] text-muted-foreground/70 text-right animate-pulse">

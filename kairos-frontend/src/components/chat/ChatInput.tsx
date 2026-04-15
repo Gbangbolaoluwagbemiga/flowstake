@@ -2,6 +2,7 @@ import { useState, KeyboardEvent, ClipboardEvent, useRef, ChangeEvent } from 're
 import { Send, Plus, X, Image as ImageIcon, Zap } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+import { ACTIVE_NATIVE_SYMBOL } from '@/lib/chain';
 
 interface ChatInputProps {
   onSend: (message: string, imageData?: { base64: string; mimeType: string }) => void;
@@ -134,7 +135,7 @@ export function ChatInput({ onSend, disabled }: ChatInputProps) {
       {/* Footer hint */}
       <p className="text-center text-[11px] text-muted-foreground/50 mt-2">
         <Zap className="w-2.5 h-2.5 inline mr-1 text-yellow-400/60" />
-        Paid per agent call in HSK · Kairos can make mistakes
+        Paid per agent call in {ACTIVE_NATIVE_SYMBOL} · Kairos can make mistakes
       </p>
     </div>
   );

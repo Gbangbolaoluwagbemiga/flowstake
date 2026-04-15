@@ -1,6 +1,7 @@
 import { Menu, Zap } from 'lucide-react';
 import { WalletButton } from '@/components/shared/WalletButton';
 import { BalanceCard } from '@/components/shared/BalanceCard';
+import { CHAIN_LABEL } from '@/lib/chain';
 
 interface HeaderProps {
   onMenuToggle?: () => void;
@@ -21,7 +22,7 @@ export function Header({ onMenuToggle }: HeaderProps) {
       {/* Network badge */}
       <div className="hidden md:flex items-center gap-1.5 glass-btn px-3 py-1.5 text-xs text-muted-foreground">
         <Zap className="w-3 h-3 text-yellow-400" />
-        <span>HashKey Testnet</span>
+        <span>{CHAIN_LABEL}</span>
         <span className="status-dot ml-0.5" />
       </div>
 

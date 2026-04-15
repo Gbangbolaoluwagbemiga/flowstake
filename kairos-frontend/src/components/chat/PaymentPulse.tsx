@@ -1,6 +1,7 @@
 import { motion, AnimatePresence } from 'framer-motion';
 import { Coins, ArrowRight } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ACTIVE_NATIVE_SYMBOL } from '@/lib/chain';
 
 interface PaymentPulseProps {
   agents: string[];
@@ -67,7 +68,7 @@ export function PaymentPulse({ agents, isVisible }: PaymentPulseProps) {
                 >
                   <ArrowRight className="w-2.5 h-2.5 text-accent-teal/40" />
                   <div className="px-2 py-0.5 rounded-md bg-white/5 border border-white/10 text-[9px] font-medium whitespace-nowrap">
-                    {agent.charAt(0).toUpperCase() + agent.slice(1)} • HSK
+                    {agent.charAt(0).toUpperCase() + agent.slice(1)} • {ACTIVE_NATIVE_SYMBOL}
                   </div>
                 </motion.div>
               ))}

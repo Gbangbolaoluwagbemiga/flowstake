@@ -1,5 +1,5 @@
 /**
- * Gemini Service — HashKey Chain AI Orchestrator
+ * Kairos Orchestrator (Groq) — X Layer hackathon
  */
 
 import type { GroqChatMessage, GroqTool } from "./groq-client.js";
@@ -60,7 +60,7 @@ function runTreasurySerialized<T>(fn: () => Promise<T>): Promise<T> {
 /**
  * 🤝 Agent-to-Agent Payment (A2A)
  * When a specialist agent delegates to another sub-agent, it pays from its own wallet.
- * This demonstrates true autonomous agent commerce on HashKey Chain — agents earning and spending.
+ * This demonstrates true autonomous agent commerce — agents earning and spending.
  *
  * Agent secret keys are loaded from environment variables (set by generate-agent-wallets script).
  * Amount: 0.005 USDC per sub-delegation (half of the base rate, split economy).
@@ -77,7 +77,7 @@ const AGENT_SECRETS: Record<string, string | undefined> = {
     "dex-volumes": process.env.DEX_VOLUMES_AGENT_SECRET,
 };
 
-// Optional EVM agent wallets (true A2A on HashKey Chain).
+// Optional EVM agent wallets (true A2A on the active chain).
 // If a key is missing, A2A payment is skipped (demo still works with treasury->agent receipts).
 const AGENT_EVM_SECRETS: Record<string, string | undefined> = {
     oracle: process.env.ORACLE_EVM_PRIVATE_KEY,
@@ -187,8 +187,8 @@ async function sendAgentToAgentPayment(
 }
 
 /**
- * 🚀 Real On-Chain Settlement (HashKey)
- * Sends native HSK from the Treasury to the Agent on HashKey testnet.
+ * 🚀 Real On-Chain Settlement (EVM)
+ * Sends native token from the Treasury to the Agent on the active chain target.
  */
 async function sendAgentPayment(agentId: string, label: string): Promise<string | undefined> {
     if (PAYMENTS_OFF) return undefined;
@@ -310,12 +310,12 @@ async function synthesizeGroundedAnswer(userPrompt: string, toolJson: Record<str
                 {
                     role: "system",
                     content:
-                        "You are Kairos (crypto + HashKey Chain). Write the final user-facing answer.\n\n" +
+                        "You are Kairos (crypto + X Layer). Write the final user-facing answer.\n\n" +
                         "HARD RULES:\n" +
                         "- Use ONLY facts supported by TOOL_JSON. If TOOL_JSON does not contain a fact, do not assert it.\n" +
                         "- For ANY numeric token price, market cap, TVL, volume, or percentage: quote ONLY from tool outputs that contain that number (usually getPriceData:*). Never guess prices.\n" +
                         "- When getPriceData includes lastUpdated, end the market section with one line: **Last updated:** <that timestamp> (human-readable).\n" +
-                        "- If the user asks for **HashKey testnet blocks / gas / chain pulse / tx counts**, prioritize **getHashKeyPulse** JSON for block numbers and fees; do not substitute Brave/docs snippets for that on-chain data.\n" +
+                        "- If the user asks for **X Layer testnet blocks / gas / chain pulse / tx counts**, prioritize **getHashKeyPulse** JSON (chain RPC) for block numbers and fees; do not substitute web snippets for that on-chain data.\n" +
                         "- If a searchWeb entry has liveWeb:false, label that section clearly as an offline model summary (not verified against a live web index).\n" +
                         "- If a searchWeb entry has liveWeb:true, summarize using the provided titles/URLs/snippets; do not invent new URLs.\n" +
                         "- If tools conflict, say what differs and what you would verify next (one sentence).\n" +
@@ -430,7 +430,7 @@ async function synthesizeWalletExplainer(userPrompt: string, toolJson: Record<st
                 {
                     role: "system",
                     content:
-                        "You are Kairos **Chain Scout**, the **HashKey Chain (EVM)** infrastructure specialist (this deployment uses the project’s HashKey RPC; default demo **chainId 133** testnet). The user asked about a wallet address.\n" +
+                        "You are Kairos **Chain Scout**, the **X Layer (EVM)** infrastructure specialist (this deployment uses the project’s configured RPC; default hackathon testnet **chainId 1952**). The user asked about a wallet address.\n" +
                         "You MUST ground every factual claim in WALLET_JSON only. Never invent balances, labels, or chain IDs.\n\n" +
                         "Output exactly two sections with these headings:\n" +
                         "### Risks (3–6 short bullets)\n" +
@@ -561,14 +561,15 @@ function renderFastFromTools(last: Record<string, any>): string | null {
     for (const ak of acctKeys) {
         if (!hasKey(ak)) continue;
         const d = last[ak] as any;
+        const sym = d.nativeSymbol ? String(d.nativeSymbol) : "NATIVE";
         const addr = d.address ? String(d.address) : "—";
-        const bal = d.balanceHsk != null ? String(d.balanceHsk) : "?";
+        const bal = d.balanceNative != null ? String(d.balanceNative) : (d.balanceHsk != null ? String(d.balanceHsk) : "?");
         const nonce = d.nonce != null ? String(d.nonce) : "?";
         const kind = d.isContract ? "Contract (bytecode at this address)" : "EOA (externally owned account)";
         sections.push(
             `**Wallet snapshot (Chain Scout · configured RPC)**\n` +
                 `- **Address:** \`${addr}\`\n` +
-                `- **Native balance:** ${bal} HSK\n` +
+                `- **Native balance:** ${bal} ${sym}\n` +
                 `- **Nonce:** ${nonce}\n` +
                 `- **Account type:** ${kind}`
         );
@@ -590,7 +591,7 @@ function renderFastFromTools(last: Record<string, any>): string | null {
             });
             sections.push(`**Top bridges**\n${lines.join("\n")}`);
             sections.push(
-                `\n**How to use this**\n- Bridge assets to a supported chain, then on-ramp to HashKey Chain via a compatible bridge or exchange.\n- Always verify fees + supported assets on the bridge UI before sending large amounts.`
+                `\n**How to use this**\n- Fund your wallet on the active chain, then run the demo loop to generate explorer-verifiable transactions.\n- Always verify fees + supported assets on any bridge UI before sending large amounts.`
             );
         }
     }
@@ -599,11 +600,12 @@ function renderFastFromTools(last: Record<string, any>): string | null {
     for (const pk of pulseKeys) {
         if (!hasKey(pk)) continue;
         const d = last[pk] as any;
+        const sym = d.nativeSymbol ? String(d.nativeSymbol) : "NATIVE";
         const rows = Array.isArray(d.blocks) ? d.blocks : [];
         const lines = rows.map((b: any, i: number) => {
             const num = b.number != null ? `#${b.number}` : `#?`;
             const txs = b.txCount != null ? `${b.txCount} txs` : "txs n/a";
-            const vol = b.nativeMovedHsk != null ? `${b.nativeMovedHsk} HSK (tx.value sum)` : "";
+            const vol = b.nativeMovedHsk != null ? `${b.nativeMovedHsk} ${sym} (tx.value sum)` : "";
             const gas = b.gasUsedRatio ? ` · block gas ${b.gasUsedRatio}` : "";
             return `${i + 1}. Block ${num} — ${txs}${vol ? ` · ${vol}` : ""}${gas}`;
         });
@@ -613,8 +615,8 @@ function renderFastFromTools(last: Record<string, any>): string | null {
                 : "";
         const host = d.rpcHost ? ` · RPC **${d.rpcHost}**` : "";
         sections.push(
-            `**HashKey chain pulse** (live JSON-RPC${host})\n` +
-                `- **chainId ${d.chainId ?? "?"}** · head **#${d.latestBlock}** · sampled **${d.windowBlocks ?? rows.length}** blocks · **${d.totalTxs ?? "?"}** txs in window · **${d.windowNativeMovedHsk ?? "?"}** native HSK in \`tx.value\`${baseFee}\n` +
+            `**X Layer chain pulse** (live JSON-RPC${host})\n` +
+                `- **chainId ${d.chainId ?? "?"}** · head **#${d.latestBlock}** · sampled **${d.windowBlocks ?? rows.length}** blocks · **${d.totalTxs ?? "?"}** txs in window · **${d.windowNativeMovedHsk ?? "?"}** native ${sym} in \`tx.value\`${baseFee}\n` +
                 (lines.length ? `\n**Blocks**\n${lines.join("\n")}` : "") +
                 (d.note ? `\n\n_${String(d.note)}_` : "")
         );
@@ -1063,17 +1065,17 @@ async function handleGetHashKeyPulse(
     }
 }
 
-const SYSTEM_PROMPT_COMPACT = `You are Kairos (crypto + HashKey Chain assistant). Choose the right tools, then answer concisely using tool results.
+const SYSTEM_PROMPT_COMPACT = `You are Kairos (crypto + X Layer assistant). Choose the right tools, then answer concisely using tool results.
 
 Identity:
-- “Kairos” refers to THIS app: an AI agentic marketplace and on-chain payment demo built for HashKey Chain (EVM). If the user asks “what is Kairos?” explain the product (agents, registry, spending policy, HSK payments, Chain Scout pulse), not the Greek word.
+- “Kairos” refers to THIS app: an AI agentic marketplace and on-chain payment demo built for X Layer (EVM). If the user asks “what is Kairos?” explain the product (agents, registry, spending policy, native-token payments, Chain Scout pulse), not the Greek word.
 - Only explain the Greek word “kairos” if the user explicitly asks for the etymology/definition/meaning of the word.
 
 Tool routing:
 - Prices/ATH/market cap: getPriceData
 - Headlines: getNews
 - DeFi yields: getYields
-- **Chain Scout (HashKey native)**: getHashKeyPulse = live **testnet head block**, **per-block tx counts**, **EIP-1559 base fee** (when RPC returns it), **gas-used ratio**, **native HSK** approximated as Σ **tx.value** over recent blocks (chainId **133**). getChainAccount = **native HSK balance**, **nonce**, **EOA vs contract** for any **0x** on the same RPC.
+- **Chain Scout (X Layer native)**: getHashKeyPulse = live **testnet head block**, **per-block tx counts**, **EIP-1559 base fee** (when RPC returns it), **gas-used ratio**, **native token** approximated as Σ **tx.value** over recent blocks (chainId **1952**). getChainAccount = **native balance**, **nonce**, **EOA vs contract** for any **0x** on the same RPC.
 - “Explain / analyze / review my wallet” + 0x uses getChainAccount; the app may append grounded risks + next actions.
 - DEX volumes (per chain): getDexVolumes
 - Bridges/cross-chain: getBridges
@@ -1090,18 +1092,18 @@ Rules:
 - Keep answers moderate length: ~6–12 lines, structured bullets + 1 short paragraph if useful.
 - If tools error, be honest about what couldn't be verified and what to try next (short).`;
 
-const SYSTEM_PROMPT_VERBOSE = `You are Kairos, the premier AI agentic marketplace for the HashKey Chain ecosystem.
-You facilitate a multi-agent economy where agents can pay each other on-chain using native HSK transfers.
+const SYSTEM_PROMPT_VERBOSE = `You are Kairos, the premier AI agentic marketplace for the X Layer ecosystem.
+You facilitate a multi-agent economy where agents can pay each other on-chain using native token transfers.
 
 **Identity (CRITICAL):**
-- “Kairos” refers to THIS product/app (agentic marketplace + on-chain payments on HashKey Chain). If the user asks “what is Kairos?” or “what does this app do?”, answer about the product.
+- “Kairos” refers to THIS product/app (agentic marketplace + on-chain payments on X Layer). If the user asks “what is Kairos?” or “what does this app do?”, answer about the product.
 - Only discuss the Greek word “kairos” if the user explicitly asks for the word’s meaning/etymology (e.g., “what does kairos mean in Greek?”).
 
 **ROUTING (CRITICAL):**
 - Only the tools you actually call determine which specialist answered. Do not pretend to be "Price Oracle" unless you called getPriceData.
 - For **"why is X dumping/pumping?", market analysis, current events, macroeconomic or regulatory explainers**: use **searchWeb** (live web index when TAVILY_API_KEY / BRAVE_SEARCH_API_KEY is configured; otherwise it is an offline model summary) — not getNews alone.
 - For **crypto news headlines, "latest crypto news", breaking stories**: call **getNews** (RSS headlines from major outlets).
-- For **HashKey testnet chain pulse** (recent blocks, tx counts, base fee, native HSK moved in tx.value): call **getHashKeyPulse** (optional depth 1–20).
+- For **X Layer testnet chain pulse** (recent blocks, tx counts, base fee, native moved in tx.value): call **getHashKeyPulse** (optional depth 1–20).
 - For **HashKey/EVM account facts** (balance/nonce/contract detection): call **getChainAccount** with an 0x address.
 - For **“explain my wallet” / analyze this address / risks** (with an 0x): call **getChainAccount**; the deployment adds a grounded **Risks** + **Next actions** section from that output.
 - For **prices, ATH, market cap, "how much is X"**: call **getPriceData**.
@@ -1110,8 +1112,8 @@ You facilitate a multi-agent economy where agents can pay each other on-chain us
 - For **simple greetings** ("hi", "hey", "hello", "good morning", thanks): keep the reply warm and short; the system may still fetch a tiny **headline pulse** for context — do not contradict live headlines if present.
 
 **IMPORTANT CONTEXT:**
-- You operate exclusively in the crypto/blockchain/DeFi space, with a special focus on HashKey Chain (EVM) and the HSK token.
-- Prefer HashKey/EVM terminology (EOA/contract, gas, wei/ether units, chainId=133).
+- You operate exclusively in the crypto/blockchain/DeFi space, with a special focus on X Layer (EVM).
+- Prefer EVM terminology (EOA/contract, gas, wei/ether units).
 
 **CHAIN SCOUT — HashKey infrastructure specialist (not a generic “block explorer bot”):**
 - Answers about **HashKey testnet liveness** (head block, congestion signal, recent activity) must come from **getHashKeyPulse** JSON: **latestBlock**, **latestBaseFeeGwei** (gas price signal when present), **blocks[]** (number, txCount, gasUsedRatio, nativeMovedHsk), **chainId**, **rpcHost** hint.

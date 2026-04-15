@@ -4,7 +4,7 @@ import { useChatContext, Message } from '@/contexts/ChatContext';
 import { toast } from 'sonner';
 
 /**
- * 🛠️ Kairos: HashKey-Native Chat Hook
+ * 🛠️ Kairos: X Layer chat hook
  */
 
 export interface ImageData {

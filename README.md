@@ -102,11 +102,11 @@ kairos-backend/      Node.js + Express + TypeScript (deployed on Railway)
       tokenomics-service.ts Token supply & unlock data
       defillama.ts        DeFiLlama TVL/fees/bridges
       perp-stats/         Perpetuals data from 7+ exchanges
-      hashkey-chain.ts     HashKey RPC helpers (balance)
-      hashkey-chain-pulse.ts Live block / gas / native-activity snapshot via HASHKEY_RPC_URL
+      hashkey-chain.ts     EVM RPC helpers (balance)
+      hashkey-chain-pulse.ts Live block / gas / native-activity snapshot via chain RPC
       rag.ts              RAG corpus indexing + semantic search
       supabase.ts         Chat history, ratings, response time logs
-      hashkey.ts          HashKey treasury + A2A payments
+      hashkey.ts          Treasury + A2A payments (EVM)
     routes/               (no x402 routes in HashKey build)
   db/
     schema.sql            Supabase table definitions (run once)
@@ -150,9 +150,9 @@ Frontend runs at `http://localhost:5173`, backend at `http://localhost:3001`.
 
 ### Chain pulse vs web search (important for demos)
 
-- **Live blocks / gas / `tx.value` activity** come from **`getHashKeyPulse`** (HashKey RPC), not from Brave/snippets.
+- **Live blocks / gas / `tx.value` activity** come from **`getHashKeyPulse`** (chain RPC), not from web snippets.
 - With **`KAIROS_GROQ_TOOL_CALLING=1`**, Groq may call **`searchWeb`** for a chain-style question; the backend **backfills `getHashKeyPulse`** when pulse JSON is still missing, **without re-running** search/news (avoids duplicate treasury pays).
-- The **company “Oracle”** web-research shortcut does **not** run when the question is classified as a **HashKey chain pulse** (avoids unrelated `searchWeb` + news on RPC-style questions).
+- The **company “Oracle”** web-research shortcut does **not** run when the question is classified as a **chain pulse** (avoids unrelated `searchWeb` + news on RPC-style questions).
 - Default **`KAIROS_FAST_MODE=1`** routes pulse + price deterministically first — safest for live demos.
 
 ---
@@ -180,7 +180,7 @@ The server loads **`kairos-backend/.env` by file path** (not only `process.cwd()
 | `KAIROS_SPENDING_POLICY_EVM_ADDRESS` | Deployed `SpendingPolicy` address (optional) |
 | `KAIROS_SPENDING_POLICY_STRICT` | `1` = block payout if `canSpend` reverts. Default `0` = still pay (direct treasury transfer) when the policy call reverts — fixes stuck “Confirming” when ABI/policy mismatches. |
 | `KAIROS_TREASURY_TX_WAIT_CONFIRMS` | Default `1` — wait for that many confirmations after each treasury native transfer (and `recordSpend` when used) before the next payout. Prevents **replacement fee too low** when multiple agents are paid in one request. Set `0` to skip waits (faster, less safe). |
-| `KAIROS_A2A_TX_WAIT_CONFIRMS` | Default `1` — same for agent→agent HSK transfers. |
+| `KAIROS_A2A_TX_WAIT_CONFIRMS` | Default `1` — same for agent→agent native-token transfers. |
 | `KAIROS_TX_WAIT_TIMEOUT_MS` | Default `180000` — max time to wait for confirmations per transaction. |
 
 **Server config:**
@@ -313,7 +313,7 @@ Agent A (oracle) → Agent B (news)  →  0.005 USDC A2A payment
 
 Both payment layers are visible in the chat UI as clickable badges linking to the active chain explorer.
 
-**Payment path:** Treasury (HSK) → Agent wallets (HSK, HashKey testnet)  
+**Payment path:** Treasury (native token) → Agent wallets (native token, X Layer testnet)
 **A2A protocol:** Agents hold their own funded wallets and sign transactions autonomously.
 
 ---
@@ -358,7 +358,7 @@ Contract methods: `registerAgent`, `updateAgent`, `updateReputation`, `getAgent`
 Demonstrates **programmable spending constraints** for autonomous agents — a key capability for production agentic systems.
 
 Features:
-- Daily spending limits per agent (native HSK)
+- Daily spending limits per agent (native token)
 - Automatic daily reset
 - Lifetime spend tracking
 - Owner-controlled limit updates
@@ -379,7 +379,7 @@ Kairos implements:
 
 
 ### Chat Interface
-Users ask natural language questions. Agent badges show which specialists responded. Payment badges link directly to HashKey Explorer.
+Users ask natural language questions. Agent badges show which specialists responded. Payment badges link directly to the X Layer explorer.
 
 ### Dashboard
 Per-agent treasury balance, tasks completed, recent activity feed with on-chain receipts. A2A debits/credits displayed with direction indicators.

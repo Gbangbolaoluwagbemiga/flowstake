@@ -8,11 +8,12 @@ import { TypingIndicator } from '@/components/chat/TypingIndicator';
 import { useChat } from '@/hooks/useChat';
 import { useWallet } from '@/contexts/WalletContext';
 import { Zap, Bot, TrendingUp, BarChart3, Newspaper, Coins, ArrowRight, Wallet, Brain, ExternalLink, Activity } from 'lucide-react';
+import { ACTIVE_NATIVE_SYMBOL, CHAIN_LABEL, addressUrl } from '@/lib/chain';
 
 const AGENT_PROMPTS = [
-  { icon: Activity, label: 'HashKey Chain Pulse', prompt: 'What is the live chain pulse on HashKey testnet? Show the last 5 blocks, tx counts, base fee, and native HSK moving on-chain.', color: '#34d399' },
+  { icon: Activity, label: 'X Layer Chain Pulse', prompt: `What is the live chain pulse on ${CHAIN_LABEL}? Show the last 5 blocks, tx counts, base fee, and native ${ACTIVE_NATIVE_SYMBOL} moving on-chain.`, color: '#34d399' },
   { icon: Wallet, label: 'Explain my wallet', prompt: 'Explain my wallet 0x3Be7fbBDbC73Fc4731D60EF09c4BA1A94DC58E41 — summarize on-chain facts, risks, and next actions.', color: '#22d3ee' },
-  { icon: TrendingUp, label: 'Price Oracle', prompt: 'What is the current price and ATH of HSK?', color: '#a78bfa' },
+  { icon: TrendingUp, label: 'Price Oracle', prompt: `What is the current price and ATH of ${ACTIVE_NATIVE_SYMBOL}?`, color: '#a78bfa' },
   { icon: Newspaper, label: 'News Scout', prompt: 'What are the latest major crypto news headlines?', color: '#60a5fa' },
   { icon: BarChart3, label: 'Protocol Stats', prompt: 'What are the top DeFi protocols by TVL right now?', color: '#818cf8' },
   { icon: Coins, label: 'Yield Optimizer', prompt: 'What are the best USDC yield opportunities across DeFi?', color: '#fbbf24' },
@@ -122,9 +123,9 @@ function HeroState({ onSend, isConnected }: { onSend: (msg: string) => void; isC
           </h1>
           <p className="mt-2 text-base text-muted-foreground max-w-md mx-auto text-balance">
             The first multi-agent AI marketplace on{' '}
-            <span className="text-[#7dd3fc] font-medium">HashKey Chain</span>.
+            <span className="text-[#7dd3fc] font-medium">X Layer</span>.
             Every answer triggers a real on-chain{' '}
-            <span className="text-[hsl(195_90%_55%)] font-medium">HSK micropayment</span>.
+            <span className="text-[hsl(195_90%_55%)] font-medium">{ACTIVE_NATIVE_SYMBOL} micropayment</span>.
           </p>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
@@ -132,13 +133,13 @@ function HeroState({ onSend, isConnected }: { onSend: (msg: string) => void; isC
             <span className="status-dot" />9 agents online
           </span>
           <span className="glass-btn px-3 py-1.5 text-xs font-mono text-emerald-400 border border-emerald-500/20 bg-emerald-500/5">
-            0.001 HSK / agent call
+            0.001 {ACTIVE_NATIVE_SYMBOL} / agent call
           </span>
           <span className="glass-btn px-3 py-1.5 text-xs text-muted-foreground flex items-center gap-1.5">
-            <Zap className="w-3 h-3 text-yellow-400" />HashKey Testnet
+            <Zap className="w-3 h-3 text-yellow-400" />{CHAIN_LABEL}
           </span>
           <a
-            href="https://testnet-explorer.hsk.xyz/address/0x3Be7fbBDbC73Fc4731D60EF09c4BA1A94DC58E41"
+            href={addressUrl('0x3Be7fbBDbC73Fc4731D60EF09c4BA1A94DC58E41')}
             target="_blank"
             rel="noopener noreferrer"
             className="glass-btn px-3 py-1.5 text-xs text-[hsl(195_90%_55%)] flex items-center gap-1 hover:brightness-125 transition-all"
@@ -155,7 +156,7 @@ function HeroState({ onSend, isConnected }: { onSend: (msg: string) => void; isC
           {[
             { icon: Wallet,  step: '01', title: 'Connect wallet', desc: 'Connect your EVM wallet (MetaMask). No subscription, no API key.' },
             { icon: Brain,   step: '02', title: 'Ask anything',   desc: 'The orchestrator routes your query to the best specialist agents.' },
-            { icon: Zap,     step: '03', title: 'Agents pay each other', desc: 'Treasury pays agents in HSK. Agents can pay sub-agents. All on-chain.' },
+              { icon: Zap,     step: '03', title: 'Agents pay each other', desc: `Treasury pays agents in ${ACTIVE_NATIVE_SYMBOL}. Agents can pay sub-agents. All on-chain.` },
           ].map(({ icon: Icon, step, title, desc }) => (
             <div key={step} className="glass-card p-3 flex flex-col gap-2 relative overflow-hidden">
               <div className="absolute top-2 right-2 text-[10px] font-mono text-muted-foreground/30 font-bold">{step}</div>
@@ -174,7 +175,7 @@ function HeroState({ onSend, isConnected }: { onSend: (msg: string) => void; isC
         <div className="glass-card border border-emerald-500/20 bg-emerald-500/5 p-3 rounded-xl">
           <div className="flex items-center justify-between mb-2">
             <span className="text-[10px] font-semibold uppercase tracking-widest text-emerald-400">Payment Flow</span>
-            <span className="text-[9px] text-muted-foreground/50 font-mono">HashKey Testnet</span>
+            <span className="text-[9px] text-muted-foreground/50 font-mono">{CHAIN_LABEL}</span>
           </div>
           <div className="flex items-center gap-2 text-[10px] font-mono overflow-x-auto scrollbar-hidden">
             <span className="text-violet-300 shrink-0">You</span>
@@ -182,7 +183,7 @@ function HeroState({ onSend, isConnected }: { onSend: (msg: string) => void; isC
             <span className="text-[hsl(195_90%_55%)] shrink-0">Kairos Orchestrator</span>
             <ArrowRight className="w-3 h-3 text-muted-foreground/40 shrink-0" />
             <span className="text-amber-400 shrink-0">Agent A</span>
-            <span className="text-[9px] text-emerald-400 shrink-0 bg-emerald-500/10 px-1 rounded">HSK ✓</span>
+            <span className="text-[9px] text-emerald-400 shrink-0 bg-emerald-500/10 px-1 rounded">{ACTIVE_NATIVE_SYMBOL} ✓</span>
             <ArrowRight className="w-3 h-3 text-muted-foreground/40 shrink-0" />
             <span className="text-sky-400 shrink-0">Agent B</span>
             <span className="text-[9px] text-emerald-400 shrink-0 bg-emerald-500/10 px-1 rounded">A2A ✓</span>

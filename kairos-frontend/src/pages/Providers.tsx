@@ -5,6 +5,7 @@ import { Search, Star, Clock, Zap, ArrowRight, TrendingUp, Newspaper, BarChart3,
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 import { useWallet } from '@/contexts/WalletContext';
+import { ACTIVE_NATIVE_SYMBOL, CHAIN_LABEL } from '@/lib/chain';
 
 const ADMIN_ADDRESS = import.meta.env.VITE_ADMIN_ADDRESS || '';
 
@@ -61,7 +62,7 @@ export default function Providers() {
           setProviders(data.providers.map((p: any, i: number) => ({
             id:           p.id,
             name:         p.name,
-            description:  p.description || 'Specialized AI agent on HashKey Chain.',
+            description:  p.description || `Specialized AI agent on ${CHAIN_LABEL}.`,
             category:     p.category    || 'Analytics',
             rating:       p.rating      || 0,
             reviews:      p.totalRatings || 0,
@@ -108,7 +109,7 @@ export default function Providers() {
             <h1 className="text-3xl font-display font-semibold gradient-heading">AI Agents</h1>
             <p className="mt-1.5 text-sm text-muted-foreground max-w-lg">
               Discover specialized agents. Each call settles on{' '}
-              <span className="text-[hsl(195_90%_55%)] font-medium">HashKey Chain Testnet</span>.
+              <span className="text-[hsl(195_90%_55%)] font-medium">{CHAIN_LABEL}</span>.
             </p>
           </div>
 
@@ -116,8 +117,8 @@ export default function Providers() {
           <div className="grid grid-cols-3 gap-3 animate-fade-in-up delay-100">
             {[
               { label: 'Active Agents',   value: providers.length || '—',  color: '#a78bfa' },
-              { label: 'Avg Price',        value: '0.001 HSK/call',            color: '#fbbf24' },
-              { label: 'Network',          value: 'HashKey',                  color: '#34d399' },
+              { label: 'Avg Price',        value: `0.001 ${ACTIVE_NATIVE_SYMBOL}/call`, color: '#fbbf24' },
+              { label: 'Network',          value: CHAIN_LABEL,                 color: '#34d399' },
             ].map(({ label, value, color }) => (
               <div key={label} className="glass-card px-4 py-3">
                 <p className="text-xs text-muted-foreground mb-0.5">{label}</p>
@@ -238,7 +239,7 @@ export default function Providers() {
                     <div className="flex items-center justify-between pt-3 border-t border-border/20 mt-auto">
                       <div>
                         <p className="text-base font-semibold text-foreground">{Number(provider.price).toFixed(3)}</p>
-                        <p className="text-[10px] text-muted-foreground/50">HSK per call</p>
+                        <p className="text-[10px] text-muted-foreground/50">{ACTIVE_NATIVE_SYMBOL} per call</p>
                       </div>
 
                       <button

@@ -1,5 +1,6 @@
 import { useWallet } from '@/contexts/WalletContext';
 import { cn } from '@/lib/utils';
+import { ACTIVE_NATIVE_SYMBOL } from '@/lib/chain';
 
 interface BalanceCardProps {
   compact?: boolean;
@@ -16,7 +17,7 @@ export function BalanceCard({ compact = false }: BalanceCardProps) {
       compact ? "text-xs" : ""
     )}>
       <span className="font-medium">{parseFloat(balance || '0').toFixed(4)}</span>
-      <span className="text-muted-foreground">HSK</span>
+      <span className="text-muted-foreground">{ACTIVE_NATIVE_SYMBOL}</span>
     </div>
   );
 }

@@ -6,7 +6,7 @@ import remarkGfm from 'remark-gfm';
 import { useState, useEffect } from 'react';
 import { useWallet } from '@/contexts/WalletContext';
 import { PaymentPulse } from './PaymentPulse';
-import { txUrl } from '@/lib/chain';
+import { ACTIVE_NATIVE_SYMBOL, txUrl } from '@/lib/chain';
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
@@ -180,7 +180,7 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
                 <>
                   {pulse}
                   <span className="font-semibold text-[10px] tracking-wide uppercase">{meta.label}</span>
-                  <span className="text-[9px] bg-sky-500/20 px-1 rounded text-sky-400 border border-sky-500/30">HSK</span>
+                  <span className="text-[9px] bg-sky-500/20 px-1 rounded text-sky-400 border border-sky-500/30">{ACTIVE_NATIVE_SYMBOL}</span>
                 </>
               );
 
@@ -191,7 +191,7 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
                   rel="noopener noreferrer"
                   className="agent-badge hover:brightness-125 transition-all group cursor-pointer flex items-center gap-1.5 py-1 px-2.5"
                   style={cardStyle}
-                  title="View treasury payment on HashKey Explorer"
+                  title="View treasury payment on explorer"
                 >
                   {labelRow}
                   <ExternalLink className="w-2.5 h-2.5 ml-0.5 opacity-40 group-hover:opacity-100 transition-opacity" />
@@ -245,12 +245,12 @@ export function ChatMessage({ id, content, isUser, timestamp, imagePreview, agen
                   rel="noopener noreferrer"
                   className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg border text-[9px] font-medium transition-colors hover:brightness-125"
                   style={{ background: '#ffffff06', borderColor: '#ffffff15', color: '#aaa' }}
-                  title={`Agent-to-Agent: ${p.from} paid ${p.to} ${p.amount} HSK for sub-task coordination`}
+                  title={`Agent-to-Agent: ${p.from} paid ${p.to} ${p.amount} ${ACTIVE_NATIVE_SYMBOL} for sub-task coordination`}
                 >
                   <span style={{ color: fromMeta.dot }}>{fromMeta.label}</span>
                   <ArrowRight className="w-2.5 h-2.5 opacity-50" />
                   <span style={{ color: toMeta.dot }}>{toMeta.label}</span>
-                  <span className="ml-0.5 text-emerald-400/70">{p.amount} HSK</span>
+                  <span className="ml-0.5 text-emerald-400/70">{p.amount} {ACTIVE_NATIVE_SYMBOL}</span>
                   <ExternalLink className="w-2 h-2 opacity-30 ml-0.5" />
                 </a>
               );

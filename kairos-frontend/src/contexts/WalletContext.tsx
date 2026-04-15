@@ -70,7 +70,7 @@ export function WalletProvider({ children }: { children: ReactNode }) {
       const userAddress = accounts?.[0];
       if (!userAddress) throw new Error('No account selected');
 
-      // Ensure chain is HashKey testnet
+      // Ensure wallet is on the active chain
       const hexChainId = await eth.request({ method: 'eth_chainId' });
       const current = Number.parseInt(String(hexChainId), 16);
       if (current !== ACTIVE_CHAIN_ID) {

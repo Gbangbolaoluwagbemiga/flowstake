@@ -1,19 +1,19 @@
 # Kairos — Product & Architecture Reference
 
-This document is indexed for retrieval-augmented answers about Kairos, HashKey Chain, on-chain agent payments, and the agentic ecosystem.
+This document is indexed for retrieval-augmented answers about Kairos, X Layer, on-chain agent payments, and the agentic ecosystem.
 
 ---
 
 ## What Kairos Is
 
-Kairos is an **AI agent marketplace** built on **HashKey Chain (EVM)**. Users chat with an AI orchestrator (Groq) that routes queries to specialist agents. Each agent call triggers a **real on-chain HSK payment** — agents earn for their work, pay sub-agents for coordination, and build on-chain reputation.
+Kairos is an **AI agent marketplace** built on **X Layer (EVM)**. Users chat with an AI orchestrator (Groq) that routes queries to specialist agents. Each agent call triggers a **real on-chain native-token payment** — agents earn for their work, pay sub-agents for coordination, and build on-chain reputation.
 
 ### Key Differentiators
-- **Native HSK micropayments** — Each agent call settles on-chain
+- **Native-token micropayments** — Each agent call settles on-chain
 - **Agent-to-agent (A2A) commerce** — Agents pay each other for sub-tasks
 - **On-chain registry** — 9 agents registered on an EVM smart contract
-- **Auditable** — All payments visible on HashKey Explorer with clickable tx hashes
-- **Multi-agent orchestration** — Gemini routes queries to specialist agents
+- **Auditable** — All payments visible on the X Layer explorer with clickable tx hashes
+- **Multi-agent orchestration** — Groq routes queries to specialist agents
 
 ---
 
@@ -25,7 +25,7 @@ Kairos is an **AI agent marketplace** built on **HashKey Chain (EVM)**. Users ch
 | News Scout | `news` | Crypto headlines (RSS) | (on-chain) |
 | Yield Optimizer | `yield` | DeFi yields from Lido, Aave, Curve, Beefy | 0.01 USDC |
 | Tokenomics Analyzer | `tokenomics` | Supply, unlocks, inflation models | 0.01 USDC |
-| Chain Scout | `chain-scout` | HashKey/EVM account facts (balance, nonce, contract detection) | (on-chain) |
+| Chain Scout | `chain-scout` | X Layer/EVM account facts (balance, nonce, contract detection) | (on-chain) |
 | Perp Stats | `perp` | Perpetual futures, funding rates, OI | 0.01 USDC |
 | Protocol Stats | `protocol` | TVL, fees, revenue via DeFiLlama | 0.01 USDC |
 | Bridge Monitor | `bridges` | Cross-chain bridge volumes | 0.01 USDC |
@@ -36,7 +36,7 @@ Kairos is an **AI agent marketplace** built on **HashKey Chain (EVM)**. Users ch
 ## Payment Architecture
 
 ### Layer 1: Treasury → Agent
-Every user query triggers the treasury paying each specialist agent in native HSK. The payment fires before the response is returned and the tx hash is embedded in the UI.
+Every user query triggers the treasury paying each specialist agent in the chain’s native token. The payment fires before the response is returned and the tx hash is embedded in the UI.
 
 ```
 User query → Orchestrator → Agent A  →  HSK (treasury → oracle)

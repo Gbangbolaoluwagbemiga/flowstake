@@ -77,7 +77,7 @@ export async function fetchHashKeyChainPulse(args: {
     }
 
     return {
-        label: "HashKey Chain (configured RPC)",
+        label: "EVM chain (configured RPC)",
         chainId,
         latestBlock: latest,
         latestBaseFeeGwei,
@@ -87,6 +87,6 @@ export async function fetchHashKeyChainPulse(args: {
         totalTxs,
         rpcHost,
         note:
-            "chainId 133 is HashKey Chain testnet. Native ‘moved’ sums tx.value per block (rough activity dial; excludes internal transfers and contract-internal accounting).",
+            "Native ‘moved’ sums tx.value per block (rough activity dial; excludes internal transfers and contract-internal accounting).",
     };
 }

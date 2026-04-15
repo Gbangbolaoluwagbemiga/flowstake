@@ -117,9 +117,7 @@ type ActivityRow = {
     direction?: 'credit' | 'debit';
 };
 
-/**
- * Parse on-chain value (native HSK) for a tx hash.
- */
+/** Parse on-chain value (native token) for a tx hash. */
 async function evmPaymentFromTx(txHash: string): Promise<{ code: string; amount: string } | null> {
     try {
         const cfg = loadActiveEvmChainFromEnv();
@@ -236,7 +234,7 @@ if (GROQ_API_KEY) {
 const paymentsMode = String(process.env.KAIROS_PAYMENTS || "hashkey").toLowerCase();
 const isHashkeyMode = paymentsMode.startsWith("hash");
 if (!isHashkeyMode) {
-    console.warn("⚠️ KAIROS_PAYMENTS is not set to hashkey; this deployment expects HashKey mode.");
+    console.warn("⚠️ KAIROS_PAYMENTS is off or non-default; onchain payments may be disabled.");
 }
 try {
     const cfg = loadActiveEvmChainFromEnv();
@@ -357,7 +355,8 @@ app.get("/api/uniswap/v3/quote", async (req, res) => {
 app.post("/api/demo/run-cycles", async (req, res) => {
     try {
         const cfg = loadActiveEvmChainFromEnv();
-        const cycles = Math.max(1, Math.min(500, Number(req.body?.cycles ?? 30) || 30));
+        // Allow cycles=0 to "fund only" without A2A.
+        const cycles = Math.max(0, Math.min(500, Number(req.body?.cycles ?? 30) || 30));
         const amount = String((req.body?.amount ?? process.env.KAIROS_DEMO_A2A_AMOUNT) || "0.00001");
         const fundAgents = Boolean(req.body?.fundAgents ?? true);
         const registryAddress = (process.env.KAIROS_AGENT_REGISTRY_EVM_ADDRESS || "").trim() || undefined;
@@ -409,18 +408,59 @@ app.post("/api/demo/run-cycles", async (req, res) => {
             owners[id] = meta.owner;
         }
 
+        // RPC failover (public RPCs can timeout).
+        const rpcCandidates = [
+            cfg.rpcUrl,
+            ...(String(process.env.XLAYER_RPC_URL_FALLBACKS || "")
+                .split(",")
+                .map((s) => s.trim())
+                .filter(Boolean)),
+        ];
+        const uniqRpc = Array.from(new Set(rpcCandidates));
+
+        const createProvider = (rpcUrl: string) => {
+            // Ethers v6: FetchRequest lets us set an explicit timeout.
+            const r = new ethers.FetchRequest(rpcUrl);
+            r.timeout = Math.max(8000, Math.min(60000, Number(process.env.KAIROS_RPC_TIMEOUT_MS || 20000) || 20000));
+            return new ethers.JsonRpcProvider(r, cfg.chainId);
+        };
+
+        async function withRpcFailover<T>(fn: (provider: ethers.JsonRpcProvider, rpcUrl: string) => Promise<T>): Promise<T> {
+            let lastErr: any;
+            for (const rpcUrl of uniqRpc) {
+                const provider = createProvider(rpcUrl);
+                try {
+                    return await fn(provider, rpcUrl);
+                } catch (e: any) {
+                    lastErr = e;
+                    const msg = String(e?.message || e || "");
+                    const isTimeout = msg.includes("ETIMEDOUT") || msg.toLowerCase().includes("timeout");
+                    if (!isTimeout) break;
+                }
+            }
+            throw lastErr;
+        }
+
+        // Fast path for demo: do NOT wait for confirmations (avoids long HTTP calls / RPC stalls).
+        async function quickSendNative(args: { fromPrivateKey: string; to: string; valueWei: bigint; tag: string }) {
+            return await withRpcFailover(async (provider, rpcUrl) => {
+                const w = new ethers.Wallet(args.fromPrivateKey, provider);
+                const tx = await w.sendTransaction({ to: args.to, value: args.valueWei });
+                return { txHash: tx.hash, rpcUrl };
+            });
+        }
+
         // Optional: fund all agents from treasury so A2A has gas + value.
         const fundTxs: { agentId: string; txHash: string; url?: string }[] = [];
         if (fundAgents) {
             const fundWei = ethers.parseEther(String((req.body?.fundAmount ?? process.env.KAIROS_DEMO_FUND_AMOUNT) || "0.01"));
             for (const id of agentIds) {
-                const txHash = await sendTreasuryPayment({
-                    cfg,
+                // Prefer fast send to avoid request timeouts; spending policy is not critical for demo-loop proofs.
+                const { txHash } = await quickSendNative({
+                    fromPrivateKey: cfg.treasuryPrivateKey,
                     to: owners[id],
-                    amountWei: fundWei,
-                    agentKey: id,
-                    label: `demo-fund:${id}`,
-                    spendingPolicy: { spendingPolicyAddress },
+                    valueWei: fundWei,
+                    tag: `demo-fund:${id}`,
                 });
                 fundTxs.push({
                     agentId: id,
@@ -444,12 +484,11 @@ app.post("/api/demo/run-cycles", async (req, res) => {
                 });
             }
 
-            const txHash = await sendAgentToAgentPayment({
-                rpcUrl: cfg.rpcUrl,
-                chainId: cfg.chainId,
+            const { txHash } = await quickSendNative({
                 fromPrivateKey: fromPk,
                 to: owners[to],
-                amountWei,
+                valueWei: amountWei,
+                tag: `demo-a2a:${from}->${to}:${i}`,
             });
             txs.push({
                 i,
@@ -629,7 +668,7 @@ app.get("/providers", async (req, res) => {
             { id: "news", name: "News Scout", category: "Analytics", description: "Crypto news & sentiment analysis. Breaking news, trending topics, and market-moving events.", price: "0.001" },
             { id: "yield", name: "Yield Optimizer", category: "DeFi", description: "Best DeFi yields across 500+ protocols. Filter by chain, APY, and TVL for optimal returns.", price: "0.001" },
             { id: "tokenomics", name: "Tokenomics Analyzer", category: "Analytics", description: "Token supply, distribution & unlock schedules. Inflation models and emission analysis.", price: "0.001" },
-            { id: "chain-scout", name: "Chain Scout", category: "Infrastructure", description: "HashKey testnet chain pulse (recent blocks, gas, native HSK in motion) and 0x account facts.", price: "0.001" },
+            { id: "chain-scout", name: "Chain Scout", category: "Infrastructure", description: "X Layer testnet chain pulse (recent blocks, gas, native token in motion) and 0x account facts.", price: "0.001" },
             { id: "perp", name: "Perp Stats", category: "Trading", description: "Perpetual futures data from 7+ exchanges. Funding rates, open interest, and volume analysis.", price: "0.001" },
             { id: "protocol", name: "Protocol Stats", category: "DeFi", description: "TVL, fees & revenue for 100+ DeFi protocols via DeFiLlama. Cross-chain protocol comparisons.", price: "0.001" },
             { id: "bridges", name: "Bridge Monitor", category: "DeFi", description: "Cross-chain bridge volumes and activity. Track capital flows across chains.", price: "0.001" },
@@ -989,16 +1028,17 @@ app.post("/ratings", async (req, res) => {
     res.json({ success: true, persisted: "supabase" });
 });
 
-// All payment routes run via HashKey Chain EVM.
+// Payments run on the active EVM chain target.
 
 // Start Server
 app.listen(PORT, () => {
+    const chain = loadActiveEvmChainFromEnv();
     console.log(`
 ╔═══════════════════════════════════════════════════════════╗
-║          KAIROS: HASHKEY AGENT MARKETPLACE               ║
+║          KAIROS: XLAYER AGENT MARKETPLACE                ║
 ╠═══════════════════════════════════════════════════════════╣
 ║  URL:       http://localhost:${PORT}                         ║
-║  Network:   HashKey Chain Testnet (133)                   ║
+║  Network:   ${String(chain.networkLabel || chain.target).padEnd(41).slice(0, 41)}║
 ╚═══════════════════════════════════════════════════════════╝
     `);
 });

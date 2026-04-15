@@ -91,7 +91,7 @@ export default function Deposit() {
                 <p className="text-xs text-muted-foreground uppercase tracking-widest mb-2">Your Balance</p>
               <p className="text-4xl font-display font-semibold">
                   <span className="kairos-gradient">{parseFloat(balance).toFixed(4)}</span>
-                  <span className="text-lg text-muted-foreground ml-2">HSK</span>
+                  <span className="text-lg text-muted-foreground ml-2">{ACTIVE_NATIVE_SYMBOL}</span>
                 </p>
                 <div className="flex items-center gap-1.5 mt-3">
                   <span className="status-dot" />
